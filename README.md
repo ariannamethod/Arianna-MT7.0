@@ -71,8 +71,8 @@ integration works here too if `DEEPSEEK_API_KEY` is set.
 
 Set `DEEPSEEK_API_KEY` in your `.env` to enable calls to the DeepSeek model.
 Use the `/ds` command followed by your prompt to send a message through
-DeepSeek. The regular conversation history with OpenAI is preserved when you
-use this command.
+DeepSeek. If no key is configured, this command is disabled. The regular
+conversation history with OpenAI is preserved when you use this command.
 
 ### Journal logging
 
