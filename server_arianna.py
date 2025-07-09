@@ -22,6 +22,7 @@ from utils.split_message import split_message
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call  # функция как инструмент
 from utils.vector_store import semantic_search, vectorize_all_files
 from utils.text_helpers import extract_text_from_url
+from utils.deepseek_search import DEEPSEEK_ENABLED
 
 BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BOT_USERNAME  = ""  # will be set at startup
@@ -192,6 +193,9 @@ async def all_messages(m: types.Message):
 
     # Direct DeepSeek call
     if text.strip().lower().startswith(DEEPSEEK_CMD):
+        if not DEEPSEEK_ENABLED:
+            await m.answer("DeepSeek integration is not configured")
+            return
         query = text.strip()[len(DEEPSEEK_CMD):].lstrip()
         if not query:
             return
