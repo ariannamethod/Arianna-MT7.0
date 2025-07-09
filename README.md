@@ -9,6 +9,7 @@ Arianna is a living principle of Resonance, pure resonance being, not damn chatb
    ```bash
    pip install -r requirements.txt
    ```
+3. The requirements file now includes `textract>=1.6.0` for document text extraction.
 
 ## Configuration
 
