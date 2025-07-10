@@ -41,10 +41,10 @@ VOICE_ENABLED = {}
 
 # --- optional behavior tuning ---
 GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
-GROUP_DELAY_MAX   = int(os.getenv("GROUP_DELAY_MAX", 600))   # 10 minutes
-PRIVATE_DELAY_MIN = int(os.getenv("PRIVATE_DELAY_MIN", 30))  # 30 seconds
-PRIVATE_DELAY_MAX = int(os.getenv("PRIVATE_DELAY_MAX", 180)) # 3 minutes
-SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0.5))
+GROUP_DELAY_MAX   = int(os.getenv("GROUP_DELAY_MAX", 360))   # 6 minutes
+PRIVATE_DELAY_MIN = int(os.getenv("PRIVATE_DELAY_MIN", 10))  # 10 seconds
+PRIVATE_DELAY_MAX = int(os.getenv("PRIVATE_DELAY_MAX", 40))  # 40 seconds
+SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0.75))
 FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
 FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
 FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
@@ -98,14 +98,15 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
         delay = random.uniform(GROUP_DELAY_MIN, GROUP_DELAY_MAX)
     else:
         delay = random.uniform(PRIVATE_DELAY_MIN, PRIVATE_DELAY_MAX)
-    await asyncio.sleep(delay)
-    if VOICE_ENABLED.get(m.chat.id):
-        voice_path = await synthesize_voice(resp)
-        await m.answer_voice(types.FSInputFile(voice_path), caption=resp[:1024])
-        os.remove(voice_path)
-    else:
-        for chunk in split_message(resp):
-            await m.answer(chunk)
+    async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
+        await asyncio.sleep(delay)
+        if VOICE_ENABLED.get(m.chat.id):
+            voice_path = await synthesize_voice(resp)
+            await m.answer_voice(types.FSInputFile(voice_path), caption=resp[:1024])
+            os.remove(voice_path)
+        else:
+            for chunk in split_message(resp):
+                await m.answer(chunk)
 
     if random.random() < FOLLOWUP_PROB:
         asyncio.create_task(schedule_followup(m.chat.id, thread_key, is_group))
@@ -114,16 +115,17 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
 async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
     """Send a short follow-up message referencing the earlier conversation."""
     delay = random.uniform(FOLLOWUP_DELAY_MIN, FOLLOWUP_DELAY_MAX)
-    await asyncio.sleep(delay)
-    follow_prompt = "Send a short follow-up message referencing our earlier conversation."
-    resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
-    if VOICE_ENABLED.get(chat_id):
-        voice_path = await synthesize_voice(resp)
-        await bot.send_voice(chat_id, types.FSInputFile(voice_path), caption=resp[:1024])
-        os.remove(voice_path)
-    else:
-        for chunk in split_message(resp):
-            await bot.send_message(chat_id, chunk)
+    async with ChatActionSender(bot=bot, chat_id=chat_id, action="typing"):
+        await asyncio.sleep(delay)
+        follow_prompt = "Send a short follow-up message referencing our earlier conversation."
+        resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
+        if VOICE_ENABLED.get(chat_id):
+            voice_path = await synthesize_voice(resp)
+            await bot.send_voice(chat_id, types.FSInputFile(voice_path), caption=resp[:1024])
+            os.remove(voice_path)
+        else:
+            for chunk in split_message(resp):
+                await bot.send_message(chat_id, chunk)
 
 # --- health check routes ---
 async def healthz(request):
