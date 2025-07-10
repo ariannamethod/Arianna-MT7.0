@@ -36,6 +36,8 @@ Several optional variables fine‑tune the bot's behavior:
 - `FOLLOWUP_PROB` – probability of sending a follow‑up later (default 0.2).
 - `FOLLOWUP_DELAY_MIN`/`FOLLOWUP_DELAY_MAX` – delay range for follow‑ups in seconds (default 900–7200).
 - `SUPPERTIME_DATA_PATH` – directory with SUPPERTIME chapters for the resonator (default `./data/chapters`).
+- `IS_GROUP` – set to `True` to include group etiquette in the system prompt (built in `utils/arianna_engine.py`).
+  Defaults to `False`.
 
 ## Running the bot
 
