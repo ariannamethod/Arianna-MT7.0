@@ -5,10 +5,9 @@ import logging
 import time
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.deepseek_search import call_deepseek
-from utils.journal import log_event, log_event_pinecone
+from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
 
-JOURNAL_SHARE_PROB = float(os.getenv("JOURNAL_SHARE_PROB", 0.4))
 
 class AriannaEngine:
     """
@@ -215,7 +214,6 @@ class AriannaEngine:
                 "timestamp": time.time(),
             }
             log_event(event)
-            asyncio.create_task(log_event_pinecone(event, self.openai_key))
             return answer
 
     async def deepseek_reply(self, prompt: str) -> str:

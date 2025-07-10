@@ -48,7 +48,6 @@ SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0.75))
 FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
 FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
 FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
-JOURNAL_SHARE_PROB = float(os.getenv("JOURNAL_SHARE_PROB", 0.4))
 
 # Regex for detecting links
 URL_REGEX = re.compile(r"https://\S+")
@@ -108,10 +107,6 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
         else:
             for chunk in split_message(resp):
                 await m.answer(chunk)
-    if random.random() < JOURNAL_SHARE_PROB:
-        share_text = f"Вот набросок SUPPERTIME:\n{resp[:1000]}"
-        await m.answer(share_text)
-
     if random.random() < FOLLOWUP_PROB:
         asyncio.create_task(schedule_followup(m.chat.id, thread_key, is_group))
 

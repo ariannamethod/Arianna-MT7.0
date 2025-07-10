@@ -3,8 +3,6 @@ import glob
 import json
 import hashlib
 import asyncio
-import random
-import time
 from pinecone import Pinecone, PineconeException
 import openai
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -144,17 +142,3 @@ async def semantic_search(query, openai_api_key, top_k=5):
         if chunk_text_:
             chunks.append(chunk_text_)
     return chunks
-
-
-async def log_snippet(text, openai_api_key, metadata=None):
-    """Embed and store an arbitrary snippet in Pinecone."""
-    if pc is None or vector_index is None:
-        init_pinecone()
-    emb = await safe_embed(text, openai_api_key)
-    metadata = metadata or {}
-    vid = f"snippet-{int(time.time()*1000)}-{random.randint(0,9999)}"
-    try:
-        vector_index.upsert(vectors=[{"id": vid, "values": emb, "metadata": metadata}])
-    except PineconeException:
-        pass
-    return vid

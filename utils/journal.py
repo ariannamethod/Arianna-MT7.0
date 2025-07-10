@@ -1,9 +1,7 @@
 import json
 import logging
 import os
-import time
 from typing import List, Dict
-from utils.vector_store import log_snippet
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +33,3 @@ def log_event(event: Dict) -> None:
         logger.error("Failed to write journal", exc_info=e)
 
 
-async def log_event_pinecone(event: Dict, openai_api_key: str) -> None:
-    """Store an event's text embedding in Pinecone."""
-    text = event.get("reply") or event.get("prompt") or ""
-    if not text.strip():
-        return
-    meta = {"type": "journal", "ts": event.get("timestamp", time.time())}
-    try:
-        await log_snippet(text, openai_api_key, meta)
-    except Exception:
-        logger.warning("Failed to log snippet to Pinecone", exc_info=True)

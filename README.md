@@ -35,8 +35,6 @@ Several optional variables fine‑tune the bot's behavior:
 - `SKIP_SHORT_PROB` – chance to ignore very short or non‑question messages (default 0.75).
 - `FOLLOWUP_PROB` – probability of sending a follow‑up later (default 0.2).
 - `FOLLOWUP_DELAY_MIN`/`FOLLOWUP_DELAY_MAX` – delay range for follow‑ups in seconds (default 900–7200).
-- `SUPPERTIME_DATA_PATH` – directory with SUPPERTIME chapters for the resonator (default `./data/chapters`).
-- `JOURNAL_SHARE_PROB` – chance to share a SUPPERTIME snippet after replies (default 0.4).
 
 ## Running the bot
 
@@ -89,15 +87,6 @@ Send `/search <query>` to look up relevant snippets from the Markdown files in
 `config/`. The bot responds with the closest matches. If you update the files,
 run `/index` to rebuild the search vectors.
 
-### Resonator chapters
-
-Arianna's resonator looks for Markdown files inside the folder from
-`SUPPERTIME_DATA_PATH` (default `./data/chapters`). At the start of each month
-these files are shuffled using a deterministic seed derived from the year and
-month. The shuffled list assigns a chapter to every day of that month. When you
-ask for today's chapter, the resonator loads the corresponding file or returns a
-message if it is missing.
-
 ### Voice mode
 
 Send `/voiceon` in a chat to receive Arianna's answers as voice notes.
@@ -118,8 +107,6 @@ the chat type and is configurable via the environment variables listed above.
 Short statements or messages without a question mark are ignored about half of
 the time. Occasionally she will send a brief follow‑up message referencing the
 earlier conversation.
-When a reply is logged, there is also a configurable chance
-(`JOURNAL_SHARE_PROB`) that she will share the stored snippet as a SUPPERTIME draft.
 
 ## Deployment
 
