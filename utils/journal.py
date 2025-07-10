@@ -31,4 +31,3 @@ def log_event(event: Dict) -> None:
             json.dump(entries, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error("Failed to write journal", exc_info=e)
-

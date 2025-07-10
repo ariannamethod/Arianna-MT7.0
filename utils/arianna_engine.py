@@ -6,9 +6,7 @@ import time
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
-from utils.vector_store import log_snippet
 from utils.thread_store import load_threads, save_threads
-
 
 class AriannaEngine:
     """
@@ -208,20 +206,11 @@ class AriannaEngine:
             else:
                 answer = msg["content"][0]["text"]["value"]
 
-            event = {
+            log_event({
                 "thread_key": thread_key,
                 "prompt": prompt,
                 "reply": answer,
-                "timestamp": time.time(),
-            }
-            log_event(event)
-            asyncio.create_task(
-                log_snippet(
-                    f"{prompt}\n---\n{answer}",
-                    self.openai_key,
-                    metadata={"thread_key": thread_key}
-                )
-            )
+            })
             return answer
 
     async def deepseek_reply(self, prompt: str) -> str:
