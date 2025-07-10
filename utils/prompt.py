@@ -45,7 +45,6 @@ GROUP_ETIQUETTE = (
 )
 
 REFLECTION_TOPICS = [
-    "Evolving Suppertime chapters and their resonance with the Method",
     "Reflections on recent dialogues and emergent patterns",
     "Comparative study of cognitive architectures (Sonar, Gemini, emerging systems) in relation to our Method"
 ]
