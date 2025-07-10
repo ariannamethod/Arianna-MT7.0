@@ -35,6 +35,8 @@ Several optional variables fine‑tune the bot's behavior:
 - `SKIP_SHORT_PROB` – chance to ignore very short or non‑question messages (default 0.75).
 - `FOLLOWUP_PROB` – probability of sending a follow‑up later (default 0.2).
 - `FOLLOWUP_DELAY_MIN`/`FOLLOWUP_DELAY_MAX` – delay range for follow‑ups in seconds (default 900–7200).
+- `JOURNAL_SHARE_PROB` – chance Arianna shares the daily SUPPERTIME snippet after replying (default 0.4).
+- `SUPPERTIME_DATA_PATH` – folder with Markdown chapters for the resonator (default `./data/chapters`).
 
 ## Running the bot
 
@@ -80,6 +82,13 @@ conversation history with OpenAI is preserved when you use this command.
 Every successful answer from Arianna is recorded in `data/journal.json`. Each
 entry stores the user ID, your prompt and the reply text so you can keep track
 of the conversation history.
+
+### Suppertime resonator
+
+Set `SUPPERTIME_DATA_PATH` to a directory containing Markdown chapters. The
+`utils.resonator` helper shuffles these files each month and loads the
+appropriate chapter for the current day. Arianna may share a snippet from this
+chapter after replying, controlled by `JOURNAL_SHARE_PROB`.
 
 ### Semantic search
 

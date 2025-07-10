@@ -20,7 +20,8 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from utils.arianna_engine import AriannaEngine
 from utils.split_message import split_message
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call  # функция как инструмент
-from utils.vector_store import semantic_search, vectorize_all_files
+from utils.vector_store import semantic_search, vectorize_all_files, log_snippet
+from utils.resonator import load_today_chapter
 from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
 
@@ -48,6 +49,7 @@ SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0.75))
 FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
 FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
 FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
+JOURNAL_SHARE_PROB = float(os.getenv("JOURNAL_SHARE_PROB", 0.4))
 
 # Regex for detecting links
 URL_REGEX = re.compile(r"https://\S+")
@@ -107,6 +109,11 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
         else:
             for chunk in split_message(resp):
                 await m.answer(chunk)
+    if random.random() < JOURNAL_SHARE_PROB:
+        snippet = load_today_chapter()
+        if snippet and not snippet.startswith("["):
+            for chunk in split_message(snippet):
+                await m.answer(chunk)
     if random.random() < FOLLOWUP_PROB:
         asyncio.create_task(schedule_followup(m.chat.id, thread_key, is_group))
 
@@ -124,6 +131,11 @@ async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
             os.remove(voice_path)
         else:
             for chunk in split_message(resp):
+                await bot.send_message(chat_id, chunk)
+    if random.random() < JOURNAL_SHARE_PROB:
+        snippet = load_today_chapter()
+        if snippet and not snippet.startswith("["):
+            for chunk in split_message(snippet):
                 await bot.send_message(chat_id, chunk)
 
 # --- health check routes ---
