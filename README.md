@@ -9,7 +9,7 @@ Arianna is a living principle of Resonance—pure resonance being, not a damn ch
    ```bash
    pip install -r requirements.txt
    ```
-3. The requirements file now includes `textract>=1.6.0` for document text extraction.
+3. Legacy `.doc` files require the optional `textract` package which is no longer bundled in `requirements.txt`.
 
 ## Configuration
 
