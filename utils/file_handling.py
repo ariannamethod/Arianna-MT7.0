@@ -63,10 +63,18 @@ def extract_text_from_rtf(path):
 def extract_text_from_doc(path):
     try:
         import textract
+    except Exception:
+        return (
+            f"[DOC extraction unavailable ({os.path.basename(path)}): "
+            "install optional 'textract'.]"
+        )
+    try:
         text = textract.process(path).decode("utf-8")
         text = text.strip()
         if text:
-            return text[:MAX_TEXT_SIZE] + ('\n[Truncated]' if len(text) > MAX_TEXT_SIZE else '')
+            return text[:MAX_TEXT_SIZE] + (
+                "\n[Truncated]" if len(text) > MAX_TEXT_SIZE else ""
+            )
         return '[DOC is empty.]'
     except Exception as e:
         return f"[Error DOC ({os.path.basename(path)}): {e}. Even ancient Word failed.]"
