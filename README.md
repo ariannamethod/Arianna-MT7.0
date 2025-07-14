@@ -129,3 +129,7 @@ web: python server_arianna.py
 ```
 
 Use it as a reference for deploying the project in environments that understand Procfiles.
+
+## License
+
+This project is licensed under the [Apache License 2.0](./LICENSE).
