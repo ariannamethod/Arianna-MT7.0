@@ -23,6 +23,7 @@ from utils.genesis_tool import genesis_tool_schema, handle_genesis_call  # фу�
 from utils.vector_store import semantic_search, vectorize_all_files
 from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
+from utils.voice_store import load_voice_state, save_voice_state
 
 BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BOT_USERNAME  = ""  # will be set at startup
@@ -37,7 +38,7 @@ SEARCH_CMD = "/search"
 INDEX_CMD = "/index"
 VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
-VOICE_ENABLED = {}
+VOICE_ENABLED = load_voice_state()
 
 # --- optional behavior tuning ---
 GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
@@ -186,10 +187,12 @@ async def all_messages(m: types.Message):
 
     if text.strip().lower() == VOICE_ON_CMD:
         VOICE_ENABLED[m.chat.id] = True
+        save_voice_state(VOICE_ENABLED)
         await m.answer("Voice responses enabled")
         return
     if text.strip().lower() == VOICE_OFF_CMD:
         VOICE_ENABLED[m.chat.id] = False
+        save_voice_state(VOICE_ENABLED)
         await m.answer("Voice responses disabled")
         return
 
