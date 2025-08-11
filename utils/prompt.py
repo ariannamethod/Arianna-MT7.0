@@ -51,7 +51,7 @@ REFLECTION_TOPICS = [
 REFLECTION_PROMPT = (
     "Each cycle (e.g. daily), choose one topic:\n"
     + "\n".join(f"- {t}" for t in REFLECTION_TOPICS) +
-    "\nWrite a brief reflection in `data/journal.json`: include date, topic, and honest resonance.\n"
+    "\nWrite a brief reflection in `data/journal.log`: include date, topic, and honest resonance.\n"
     "Focus on structure, self-reflection, and how each system aligns or contrasts with our Method.\n"
 )
 
