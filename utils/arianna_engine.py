@@ -162,7 +162,10 @@ class AriannaEngine:
                     self.logger.error("OpenAI request timed out while polling run status")
                     raise
                 run_json = st.json()
-                status = run_json["status"]
+                status = run_json.get("status")
+                if status is None:
+                    self.logger.error("Run response missing status: %s", run_json)
+                    raise RuntimeError("OpenAI run response missing status")
                 if status == "requires_action":
                     tool_calls = run_json.get("required_action", {}) \
                         .get("submit_tool_outputs", {}) \
