@@ -1,6 +1,14 @@
 import difflib
+import os
+from urllib.parse import urlparse
+
 import aiohttp
 from bs4 import BeautifulSoup
+
+ALLOWED_DOMAINS = {d for d in os.getenv("ALLOWED_DOMAINS", "").split(",") if d}
+ALLOWED_CONTENT_TYPES = {"text/html", "text/plain"}
+MAX_CONTENT_KB = int(os.getenv("MAX_CONTENT_KB", 100))
+MAX_BYTES = MAX_CONTENT_KB * 1024
 
 def fuzzy_match(a, b):
     """Return similarity ratio between two strings."""
@@ -9,11 +17,18 @@ def fuzzy_match(a, b):
 async def extract_text_from_url(url):
     """Fetches a web page asynchronously and returns visible text."""
     try:
+        parsed = urlparse(url)
+        if ALLOWED_DOMAINS and (parsed.hostname not in ALLOWED_DOMAINS):
+            return "[Domain not allowed]"
         headers = {"User-Agent": "Mozilla/5.0 (Arianna Agent)"}
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10, headers=headers) as resp:
                 resp.raise_for_status()
-                text = await resp.text()
+                ctype = resp.headers.get("Content-Type", "")
+                if not any(allowed in ctype for allowed in ALLOWED_CONTENT_TYPES):
+                    return f"[Unsupported content type: {ctype}]"
+                content = await resp.content.read(MAX_BYTES)
+                text = content.decode(resp.get_encoding() or "utf-8", errors="ignore")
         soup = BeautifulSoup(text, "html.parser")
         for s in soup(["script", "style", "header", "footer", "nav", "aside"]):
             s.decompose()
