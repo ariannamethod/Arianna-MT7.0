@@ -7,11 +7,6 @@ import tempfile
 
 import openai
 from pydub import AudioSegment
-
-logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger(__name__)
-
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils.chat_action import ChatActionSender
 from aiohttp import web
@@ -19,10 +14,13 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from utils.arianna_engine import AriannaEngine
 from utils.split_message import split_message
-from utils.genesis_tool import genesis_tool_schema, handle_genesis_call  # функция как инструмент
 from utils.vector_store import semantic_search, vectorize_all_files
 from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
+
+logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BOT_USERNAME  = ""  # will be set at startup
@@ -59,8 +57,15 @@ async def append_link_snippets(text: str) -> str:
     if not urls:
         return text
     parts = [text]
-    for url in urls:
-        snippet = await extract_text_from_url(url)
+    tasks = [asyncio.wait_for(extract_text_from_url(url), timeout=10) for url in urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for url, result in zip(urls, results):
+        if isinstance(result, asyncio.TimeoutError):
+            snippet = "[Timeout]"
+        elif isinstance(result, Exception):
+            snippet = f"[Error loading page: {result}]"
+        else:
+            snippet = result
         parts.append(f"\n[Snippet from {url}]\n{snippet[:500]}")
     return "\n".join(parts)
 
@@ -289,5 +294,6 @@ async def main():
     print(f"🚀 Arianna webhook started on port {port}")
     await asyncio.Event().wait()
 
-if __name__ == "__main__":    asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 
