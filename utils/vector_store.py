@@ -2,7 +2,6 @@ import os
 import glob
 import json
 import hashlib
-import asyncio
 from pinecone import Pinecone, PineconeException
 import openai
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -15,6 +14,7 @@ PINECONE_INDEX = os.getenv("PINECONE_INDEX")
 
 pc = None
 vector_index = None
+openai_client = None
 
 
 def init_pinecone():
@@ -49,15 +49,22 @@ def save_vector_meta(meta):
     with open(VECTOR_META_PATH, "w") as f:
         json.dump(meta, f)
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
-async def safe_embed(text, openai_api_key):
-    return await get_embedding(text, openai_api_key)
+def init_openai_client(api_key):
+    global openai_client
+    if openai_client is None:
+        openai_client = openai.AsyncOpenAI(api_key=api_key)
+    return openai_client
 
-async def get_embedding(text, openai_api_key):
-    openai.api_key = openai_api_key
-    res = openai.embeddings.create(
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+async def safe_embed(text):
+    return await get_embedding(text)
+
+
+async def get_embedding(text):
+    res = await openai_client.embeddings.create(
         model="text-embedding-ada-002",
-        input=text
+        input=text,
     )
     return res.data[0].embedding
 
@@ -75,6 +82,7 @@ def chunk_text(text, chunk_size=900, overlap=120):
 async def vectorize_all_files(openai_api_key, force=False, on_message=None):
     if pc is None or vector_index is None:
         init_pinecone()
+    init_openai_client(openai_api_key)
     current = scan_files()
     previous = load_vector_meta()
     changed = [f for f in current if (force or current[f] != previous.get(f))]
@@ -91,7 +99,7 @@ async def vectorize_all_files(openai_api_key, force=False, on_message=None):
         for idx, chunk in enumerate(chunks):
             meta_id = f"{fname}:{idx}"
             try:
-                emb = await safe_embed(chunk, openai_api_key)
+                emb = await safe_embed(chunk)
                 vector_index.upsert(vectors=[
                     {
                         "id": meta_id,
@@ -125,7 +133,8 @@ async def vectorize_all_files(openai_api_key, force=False, on_message=None):
 async def semantic_search(query, openai_api_key, top_k=5):
     if pc is None or vector_index is None:
         init_pinecone()
-    emb = await safe_embed(query, openai_api_key)
+    init_openai_client(openai_api_key)
+    emb = await safe_embed(query)
     res = vector_index.query(vector=emb, top_k=top_k, include_metadata=True)
     chunks = []
     matches = getattr(res, "matches", [])
