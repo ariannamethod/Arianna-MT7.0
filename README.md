@@ -80,9 +80,9 @@ conversation history with OpenAI is preserved when you use this command.
 
 ### Journal logging
 
-Every successful answer from Arianna is recorded in `data/journal.json`. Each
-entry stores the user ID, your prompt and the reply text so you can keep track
-of the conversation history.
+Every successful answer from Arianna is recorded in a rotating log file at
+`data/journal.log`. Each entry stores the user ID, your prompt and the reply
+text with sensitive details masked.
 
 ### Semantic search
 

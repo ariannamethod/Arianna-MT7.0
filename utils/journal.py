@@ -1,33 +1,41 @@
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
-from typing import List, Dict
-
-logger = logging.getLogger(__name__)
+import re
+from typing import Dict
 
 _JOURNAL_DIR = "data"
-_JOURNAL_PATH = os.path.join(_JOURNAL_DIR, "journal.json")
+_JOURNAL_PATH = os.path.join(_JOURNAL_DIR, "journal.log")
+_MAX_BYTES = 1_000_000
 
+logger = logging.getLogger("journal")
 
-def _load_journal() -> List[Dict]:
-    """Load existing journal entries from the JSON file."""
-    try:
-        with open(_JOURNAL_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
+if not logger.handlers:
+    os.makedirs(_JOURNAL_DIR, exist_ok=True)
+    handler = RotatingFileHandler(
+        _JOURNAL_PATH, maxBytes=_MAX_BYTES, backupCount=3, encoding="utf-8"
+    )
+    formatter = logging.Formatter("%(asctime)s %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
+_EMAIL_RE = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
+_DIGIT_RE = re.compile(r"\d")
+
+def _mask(value: str) -> str:
+    value = _EMAIL_RE.sub("[EMAIL]", value)
+    value = _DIGIT_RE.sub("X", value)
+    return value
+
+def _sanitize(event: Dict) -> Dict:
+    return {k: _mask(v) if isinstance(v, str) else v for k, v in event.items()}
 
 def log_event(event: Dict) -> None:
-    """Append an event dictionary to ``data/journal.json``."""
-    os.makedirs(_JOURNAL_DIR, exist_ok=True)
-    entries = _load_journal()
-    entries.append(event)
+    """Write an event dictionary to the rotating log file."""
+    safe_event = _sanitize(event)
     try:
-        with open(_JOURNAL_PATH, "w", encoding="utf-8") as f:
-            json.dump(entries, f, ensure_ascii=False, indent=2)
+        logger.info(json.dumps(safe_event, ensure_ascii=False))
     except Exception as e:
         logger.error("Failed to write journal", exc_info=e)
