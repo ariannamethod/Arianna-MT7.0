@@ -3,8 +3,9 @@ import glob
 import json
 import hashlib
 import time
-import logging
 from typing import Optional, Any
+
+from utils.logging import get_logger
 
 from pinecone import Pinecone, PineconeException
 from openai import AsyncOpenAI
@@ -15,7 +16,7 @@ from .atomic_json import atomic_json_dump
 VECTOR_META_PATH = "vector_store.meta.json"
 EMBED_DIM = 1536  # For OpenAI ada-002
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def file_hash(fname: str) -> str:

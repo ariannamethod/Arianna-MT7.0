@@ -2,7 +2,6 @@ import os
 import re
 import asyncio
 import random
-import logging
 import tempfile
 import time
 
@@ -23,10 +22,9 @@ from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
 from utils.genesis_service import start_genesis_service
+from utils.logging import get_logger, set_request_id
 
-logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BOT_USERNAME  = ""  # will be set at startup
@@ -200,6 +198,7 @@ async def status(request):
 
 @dp.message(lambda m: m.voice)
 async def voice_messages(m: types.Message):
+    set_request_id(f"{m.chat.id}:{m.message_id}")
     is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
     user_id = str(m.from_user.id)
     if not await rate_limited(user_id):
@@ -220,6 +219,7 @@ async def voice_messages(m: types.Message):
 
 @dp.message(lambda m: True)
 async def all_messages(m: types.Message):
+    set_request_id(f"{m.chat.id}:{m.message_id}")
     user_id = str(m.from_user.id)
     if not await rate_limited(user_id):
         await m.answer("Too many requests. Please slow down.")
@@ -357,7 +357,7 @@ async def main():
     port = int(os.getenv("PORT", 8000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🚀 Arianna webhook started on port {port}")
+    logger.info("Arianna webhook started", port=port)
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
