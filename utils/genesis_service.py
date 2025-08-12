@@ -1,10 +1,10 @@
 import asyncio
 import threading
-import logging
 
 from utils.genesis_tool import get_genesis_instance
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def _worker():
     inst = get_genesis_instance()

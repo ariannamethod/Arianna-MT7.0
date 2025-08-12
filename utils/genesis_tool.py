@@ -1,11 +1,11 @@
 import os
 import json
-import logging
 from typing import Optional
 
 from utils.genesis import AriannaGenesis
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _genesis_instance: Optional[AriannaGenesis] = None
 

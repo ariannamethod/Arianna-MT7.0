@@ -1,8 +1,9 @@
 import asyncio
-import logging
 from typing import Coroutine, Any, Set
 
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Keep a reference to background tasks if tracking is enabled.
 _tracked: Set[asyncio.Task] = set()

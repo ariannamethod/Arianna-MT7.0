@@ -1,12 +1,13 @@
 import os
 import asyncio
 import httpx
-import logging
 import json
+
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
+from utils.logging import get_logger
 
 class AriannaEngine:
     """
@@ -16,7 +17,7 @@ class AriannaEngine:
     """
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.headers    = {
             "Authorization": f"Bearer {self.openai_key}",

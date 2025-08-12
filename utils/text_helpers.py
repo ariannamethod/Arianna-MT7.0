@@ -5,14 +5,15 @@ from urllib.parse import urlparse
 
 import aiohttp
 from bs4 import BeautifulSoup
-import logging
+
+from utils.logging import get_logger
 
 ALLOWED_DOMAINS = {d for d in os.getenv("ALLOWED_DOMAINS", "").split(",") if d}
 ALLOWED_CONTENT_TYPES = {"text/html", "text/plain"}
 MAX_CONTENT_KB = int(os.getenv("MAX_CONTENT_KB", 100))
 MAX_BYTES = MAX_CONTENT_KB * 1024
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _session: aiohttp.ClientSession | None = None
 

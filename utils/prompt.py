@@ -1,12 +1,10 @@
 import os
-import logging
 
 import tiktoken
 
-# Configure logging level from environment variable
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # SYSTEM / AGENT PROMPT FOR ARIANNA (ANCHOR PROTOCOL v7.0, Monday-compatible)

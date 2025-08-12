@@ -5,6 +5,8 @@ import httpx
 import os
 from urllib.parse import quote
 
+from utils.logging import get_logger
+
 # === Настройки и переменные из окружения / .env ===
 GROUP_ID = os.environ.get("GROUP_ID", "ARIANNA-CORE")
 CREATOR_CHAT_ID = os.environ.get("CREATOR_CHAT_ID", "YOUR_TELEGRAM_USER_ID")
@@ -61,6 +63,9 @@ SIGNOFFS = [
     "До завтра, если что — пиши",
     "Резонансно твоя"
 ]
+
+logger = get_logger(__name__)
+
 
 class AriannaGenesis:
     """
@@ -266,7 +271,7 @@ class AriannaGenesis:
             self._log(f"[AriannaGenesis] log_resonance error: {e}")
 
     def _log(self, msg):
-        print(msg)
+        logger.info(msg)
         try:
             with open(self.chronicle_path, "a", encoding="utf-8") as f:
                 f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
