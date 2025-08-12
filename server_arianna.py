@@ -73,11 +73,18 @@ async def append_link_snippets(text: str) -> str:
 
 async def transcribe_voice(file_path: str) -> str:
     """Transcribe an audio file using OpenAI Whisper."""
-    with open(file_path, "rb") as f:
-        resp = await openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-        )
+    f = await asyncio.to_thread(open, file_path, "rb")
+    try:
+        try:
+            resp = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+            )
+        except Exception as e:
+            logger.exception("Transcription request failed: %s", e)
+            raise RuntimeError("Failed to transcribe audio. Please try again later.") from e
+    finally:
+        await asyncio.to_thread(f.close)
     return resp.text
 
 
@@ -87,14 +94,24 @@ async def synthesize_voice(text: str) -> str:
     ogg_fd = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
     mp3_fd.close()
     ogg_fd.close()
-    resp = await openai_client.audio.speech.with_streaming_response.create(
-        model="tts-1",
-        voice="alloy",
-        input=text,
-    )
-    await resp.stream_to_file(mp3_fd.name)
-    AudioSegment.from_file(mp3_fd.name).export(ogg_fd.name, format="ogg", codec="libopus")
-    os.remove(mp3_fd.name)
+    try:
+        try:
+            resp = await openai_client.audio.speech.with_streaming_response.create(
+                model="tts-1",
+                voice="alloy",
+                input=text,
+            )
+            await resp.stream_to_file(mp3_fd.name)
+        except Exception as e:
+            logger.exception("Speech synthesis request failed: %s", e)
+            raise RuntimeError("Failed to synthesize voice. Please try again later.") from e
+        await asyncio.to_thread(
+            lambda: AudioSegment.from_file(mp3_fd.name).export(
+                ogg_fd.name, format="ogg", codec="libopus"
+            )
+        )
+    finally:
+        await asyncio.to_thread(os.remove, mp3_fd.name)
     return ogg_fd.name
 
 
