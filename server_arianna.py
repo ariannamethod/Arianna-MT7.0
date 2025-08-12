@@ -160,8 +160,8 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
         delay = random.uniform(GROUP_DELAY_MIN, GROUP_DELAY_MAX)
     else:
         delay = random.uniform(PRIVATE_DELAY_MIN, PRIVATE_DELAY_MAX)
+    await asyncio.sleep(delay)
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-        await asyncio.sleep(delay)
         if VOICE_ENABLED.get(m.chat.id):
             voice_path = await synthesize_voice(resp)
             await m.answer_voice(types.FSInputFile(voice_path), caption=resp[:1024])
@@ -177,8 +177,8 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
 async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
     """Send a short follow-up message referencing the earlier conversation."""
     delay = random.uniform(FOLLOWUP_DELAY_MIN, FOLLOWUP_DELAY_MAX)
+    await asyncio.sleep(delay)
     async with ChatActionSender(bot=bot, chat_id=chat_id, action="typing"):
-        await asyncio.sleep(delay)
         follow_prompt = "Send a short follow-up message referencing our earlier conversation."
         resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
         if VOICE_ENABLED.get(chat_id):
