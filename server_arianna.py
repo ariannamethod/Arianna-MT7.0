@@ -76,7 +76,7 @@ URL_REGEX = re.compile(r"https://\S+")
 
 async def append_link_snippets(text: str) -> str:
     """Append snippet from any https:// link in the text."""
-    urls = URL_REGEX.findall(text)
+    urls = URL_REGEX.findall(text)[:3]
     if not urls:
         return text
     parts = [text]
@@ -84,8 +84,10 @@ async def append_link_snippets(text: str) -> str:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for url, result in zip(urls, results):
         if isinstance(result, asyncio.TimeoutError):
+            logger.warning("Timeout fetching %s", url)
             snippet = "[Timeout]"
         elif isinstance(result, Exception):
+            logger.exception("Error loading page %s: %s", url, result)
             snippet = f"[Error loading page: {result}]"
         else:
             snippet = result
