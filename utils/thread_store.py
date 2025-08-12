@@ -1,6 +1,8 @@
 import os
 import json
 
+from .atomic_json import atomic_json_dump
+
 THREADS_PATH = "data/threads.json"
 
 
@@ -18,8 +20,6 @@ def load_threads(path: str = THREADS_PATH) -> dict:
 def save_threads(threads: dict, path: str = THREADS_PATH) -> None:
     """Save thread mappings to JSON."""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(threads, f, ensure_ascii=False, indent=2)
+        atomic_json_dump(path, threads, ensure_ascii=False, indent=2)
     except Exception:
         pass
