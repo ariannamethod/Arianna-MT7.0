@@ -19,6 +19,7 @@ from utils.vector_store import semantic_search, vectorize_all_files
 from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
+from utils.tasks import create_task
 
 logging.basicConfig(level=logging.INFO)
 
@@ -57,7 +58,7 @@ async def rate_limited(user_id: str) -> bool:
         if _message_counts[user_id] <= 0:
             del _message_counts[user_id]
 
-    asyncio.create_task(decrement())
+    create_task(decrement())
     return True
 
 # --- optional behavior tuning ---
@@ -156,7 +157,7 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
                 await m.answer(chunk)
 
     if random.random() < FOLLOWUP_PROB:
-        asyncio.create_task(schedule_followup(m.chat.id, thread_key, is_group))
+        create_task(schedule_followup(m.chat.id, thread_key, is_group), track=True)
 
 
 async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
@@ -201,7 +202,7 @@ async def voice_messages(m: types.Message):
             return
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         resp = await engine.ask(thread_key, text, is_group=is_group)
-        asyncio.create_task(send_delayed_response(m, resp, is_group, thread_key))
+        create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
 @dp.message(lambda m: True)
 async def all_messages(m: types.Message):
@@ -304,7 +305,7 @@ async def all_messages(m: types.Message):
         # Генерируем ответ через Assistants API
         prompt = await append_link_snippets(text)
         resp = await engine.ask(thread_key, prompt, is_group=is_group)
-        asyncio.create_task(send_delayed_response(m, resp, is_group, thread_key))
+        create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
 async def main():
     global BOT_USERNAME, BOT_ID
