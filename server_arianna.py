@@ -17,7 +17,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from utils.arianna_engine import AriannaEngine
 from utils.split_message import split_message
-from utils.vector_store import semantic_search, vectorize_all_files
+from utils.vector_store import VectorStore
 from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
@@ -35,6 +35,7 @@ bot    = Bot(token=BOT_TOKEN)
 dp     = Dispatcher(bot=bot)
 engine = AriannaEngine()
 openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+vector_store = VectorStore(openai_client=openai_client)
 DEEPSEEK_CMD = "/ds"
 SEARCH_CMD = "/search"
 INDEX_CMD = "/index"
@@ -230,7 +231,7 @@ async def all_messages(m: types.Message):
         if not query:
             return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            chunks = await semantic_search(query, engine.openai_key)
+            chunks = await vector_store.semantic_search(query)
             if not chunks:
                 await m.answer("No relevant documents found.")
             else:
@@ -246,7 +247,7 @@ async def all_messages(m: types.Message):
             async def sender(msg):
                 await m.answer(msg)
 
-            await vectorize_all_files(engine.openai_key, force=True, on_message=sender)
+            await vector_store.vectorize_all_files(force=True, on_message=sender)
             await m.answer("Indexing complete.")
         return
 
