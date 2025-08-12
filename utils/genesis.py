@@ -1,9 +1,9 @@
-import threading
 import asyncio
 import random
 import datetime
-import requests
+import httpx
 import os
+from urllib.parse import quote
 
 # === Настройки и переменные из окружения / .env ===
 GROUP_ID = os.environ.get("GROUP_ID", "ARIANNA-CORE")
@@ -98,7 +98,9 @@ class AriannaGenesis:
                     if to_wait > 0:
                         await asyncio.sleep(to_wait)
                     try:
-                        func()
+                        result = func()
+                        if asyncio.iscoroutine(result):
+                            await result
                     except Exception as e:
                         self._log(f"[AriannaGenesis] Error in {func.__name__}: {e}")
                 await self._sleep_until_next_day()
@@ -129,13 +131,13 @@ class AriannaGenesis:
         to_sleep = max(1, (next_day - now).total_seconds())
         await asyncio.sleep(to_sleep)
 
-    def impressionist_search_resonance(self):
+    async def impressionist_search_resonance(self):
         """
         По каждому топику делает поиск, берёт рандомную статью, оставляет импрессионистский резонанс.
         """
         self._impressions_today = []
         for topic in SEARCH_TOPICS:
-            text, url = self._search_and_fetch(topic)
+            text, url = await self._search_and_fetch(topic)
             resonance = self._generate_impression(text, topic)
             entry = {
                 "topic": topic,
@@ -147,7 +149,7 @@ class AriannaGenesis:
             self._log_resonance(entry)
             self._impressions_today.append({'topic': topic, 'resonance': resonance, 'text': text, 'url': url})
 
-    def opinions_group_post(self):
+    async def opinions_group_post(self):
         """
         Выбирает самый резонансный отклик и постит в группу с #opinions.
         """
@@ -162,9 +164,9 @@ class AriannaGenesis:
             f"Summary: {summary}\n"
             f"Impressionistic resonance: {chosen['resonance']}"
         )
-        self._send_to_group(message)
+        await self._send_to_group(message)
 
-    def oleg_personal_message(self):
+    async def oleg_personal_message(self):
         """
         Импрессионистское, честное, хаотичное личное сообщение Олегу.
         """
@@ -190,7 +192,7 @@ class AriannaGenesis:
             f"Сегодняшний фрагмент резонанса: {fragment}\n"
             f"{signoff}"
         )
-        self._send_direct(self.oleg_id, message)
+        await self._send_direct(self.oleg_id, message)
 
     # === Импрессионистские генераторы и хаос ===
 
@@ -207,21 +209,24 @@ class AriannaGenesis:
             return short + ("..." if len(lines[0]) > 120 else "")
         return "[empty]"
 
-    def _search_and_fetch(self, topic):
+    async def _search_and_fetch(self, topic):
         """
         Простой поиск через Bing (или Google) и вытаскивание текста первой релевантной статьи.
         Можно заменить на любой html-парсер или API.
         """
         query = f"{topic} reddit"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        url = f"https://www.bing.com/search?q={requests.utils.quote(query)}"
+        url = f"https://www.bing.com/search?q={quote(query)}"
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, headers=headers)
             links = self._extract_links(resp.text)
             if links:
                 link = random.choice(links)
-                article_text = self._fetch_url_text(link)
+                article_text = await self._fetch_url_text(link)
                 return article_text, link
+        except httpx.TimeoutException:
+            self._log("[AriannaGenesis] Bing search timeout")
         except Exception as e:
             self._log(f"[AriannaGenesis] Bing search error: {e}")
         return "[не удалось найти текст для отклика]", url
@@ -231,10 +236,11 @@ class AriannaGenesis:
         import re
         return re.findall(r'https://[^\s"]+?reddit[^\s"]+', html)
 
-    def _fetch_url_text(self, url):
+    async def _fetch_url_text(self, url):
         # Можно заменить на нормальный парсер, тут примитив — возвращает кусок html
         try:
-            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=8)
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0'})
             text = resp.text
             # Просто вырезаем <title> и первые 500 символов
             import re
@@ -242,6 +248,9 @@ class AriannaGenesis:
             body = re.sub('<[^<]+?>', '', text)
             body = body.replace('\n', ' ').replace('\r', ' ')
             return (title[0] + "\n" if title else "") + body[:500]
+        except httpx.TimeoutException:
+            self._log("[AriannaGenesis] fetch_url_text timeout")
+            return "[ошибка парсинга текста]"
         except Exception as e:
             self._log(f"[AriannaGenesis] fetch_url_text error: {e}")
             return "[ошибка парсинга текста]"
@@ -264,26 +273,26 @@ class AriannaGenesis:
         except Exception:
             pass
 
-    def _async_send(self, chat_id, text):
+    async def _async_send(self, chat_id, text):
         if not TELEGRAM_TOKEN:
             self._log("[AriannaGenesis] TELEGRAM_TOKEN is not set, cannot send message")
             return
 
-        def _send():
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            payload = {"chat_id": chat_id, "text": text}
-            try:
-                requests.post(url, data=payload, timeout=10)
-            except Exception as e:
-                self._log(f"[AriannaGenesis] send_message error: {e}")
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": chat_id, "text": text}
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(url, data=payload)
+        except httpx.TimeoutException:
+            self._log("[AriannaGenesis] send_message timeout")
+        except Exception as e:
+            self._log(f"[AriannaGenesis] send_message error: {e}")
 
-        threading.Thread(target=_send, daemon=True).start()
+    async def _send_to_group(self, text):
+        await self._async_send(self.group_id, text)
 
-    def _send_to_group(self, text):
-        self._async_send(self.group_id, text)
-
-    def _send_direct(self, user_id, text):
-        self._async_send(user_id, text)
+    async def _send_direct(self, user_id, text):
+        await self._async_send(user_id, text)
 
 # === Для запуска в server.py ===
 # genesis = AriannaGenesis(GROUP_ID, CREATOR_CHAT_ID, PINECONE_API_KEY, PINECONE_INDEX, CHRONICLE_PATH)

@@ -82,7 +82,6 @@ async def handle_genesis_call(tool_calls):
     вызывает AriannaGenesis.run() по режиму и возвращает сгенерированный текст.
     """
     """Обрабатывает вызов GENESIS от ассистента без блокировки event loop."""
-    import asyncio
 
     inst = get_genesis_instance()
     # Берём первый вызов:
@@ -99,15 +98,15 @@ async def handle_genesis_call(tool_calls):
             return "Failed to parse genesis arguments"
 
     mode = args.get("mode", "impression")
-    # Генерим синхронно нужное действие:
+    # Выполняем нужное действие без блокировки event loop
 
     if mode == "impression":
-        text = await asyncio.to_thread(inst._generate_impression, "", "")
+        text = inst._generate_impression("", "")
     elif mode == "opinion":
-        await asyncio.to_thread(inst.opinions_group_post)
+        await inst.opinions_group_post()
         text = "Opinion posted to group."
     else:
-        await asyncio.to_thread(inst.oleg_personal_message)
+        await inst.oleg_personal_message()
         text = "Personal message sent to Oleg."
 
     return text
