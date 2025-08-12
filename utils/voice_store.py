@@ -1,6 +1,8 @@
 import os
 import json
 
+from .atomic_json import atomic_json_dump
+
 VOICE_PATH = "data/voice.json"
 
 
@@ -18,8 +20,6 @@ def load_voice_state(path: str = VOICE_PATH) -> dict:
 def save_voice_state(state: dict, path: str = VOICE_PATH) -> None:
     """Save voice mode mappings to JSON."""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
+        atomic_json_dump(path, state, ensure_ascii=False, indent=2)
     except Exception:
         pass

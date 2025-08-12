@@ -6,6 +6,8 @@ from pinecone import Pinecone, PineconeException
 import openai
 from tenacity import retry, stop_after_attempt, wait_fixed
 
+from .atomic_json import atomic_json_dump
+
 VECTOR_META_PATH = "vector_store.meta.json"
 EMBED_DIM = 1536  # For OpenAI ada-002
 
@@ -46,8 +48,7 @@ def load_vector_meta():
     return {}
 
 def save_vector_meta(meta):
-    with open(VECTOR_META_PATH, "w") as f:
-        json.dump(meta, f)
+    atomic_json_dump(VECTOR_META_PATH, meta)
 
 def init_openai_client(api_key):
     global openai_client
