@@ -2,6 +2,8 @@ import os
 import glob
 import json
 import hashlib
+import time
+import logging
 from pinecone import Pinecone, PineconeException
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -16,17 +18,48 @@ PINECONE_INDEX = os.getenv("PINECONE_INDEX")
 
 pc = None
 vector_index = None
+SEARCH_ENABLED = True
+
+logger = logging.getLogger(__name__)
 
 def init_pinecone():
     """Initialize Pinecone connection if it hasn't been already."""
-    global pc, vector_index
+    global pc, vector_index, SEARCH_ENABLED
     if pc is not None and vector_index is not None:
         return
     if not PINECONE_API_KEY or not PINECONE_INDEX:
-        raise RuntimeError("PINECONE_API_KEY and PINECONE_INDEX must be set")
+        logger.warning("Pinecone API key or index not set; search disabled")
+        SEARCH_ENABLED = False
+        return
     pc = Pinecone(api_key=PINECONE_API_KEY)
-    if PINECONE_INDEX not in [x["name"] for x in pc.list_indexes()]:
-        pc.create_index(name=PINECONE_INDEX, dimension=EMBED_DIM, metric="cosine")
+    indexes = None
+    for attempt in range(3):
+        try:
+            indexes = pc.list_indexes()
+            break
+        except Exception as e:
+            logger.warning("Failed to list Pinecone indexes: %s (attempt %d/3)", e, attempt + 1)
+            time.sleep(1)
+    if indexes is None:
+        logger.error("Could not list Pinecone indexes; search disabled")
+        pc = None
+        vector_index = None
+        SEARCH_ENABLED = False
+        return
+    if PINECONE_INDEX not in [x["name"] for x in indexes]:
+        for attempt in range(3):
+            try:
+                pc.create_index(name=PINECONE_INDEX, dimension=EMBED_DIM, metric="cosine")
+                break
+            except Exception as e:
+                logger.warning("Failed to create Pinecone index: %s (attempt %d/3)", e, attempt + 1)
+                time.sleep(1)
+        else:
+            logger.error("Could not create Pinecone index; search disabled")
+            pc = None
+            vector_index = None
+            SEARCH_ENABLED = False
+            return
     vector_index = pc.Index(PINECONE_INDEX)
 
 def file_hash(fname):
@@ -72,8 +105,16 @@ def chunk_text(text, chunk_size=900, overlap=120):
     return chunks
 
 async def vectorize_all_files(openai_api_key, force=False, on_message=None):
+    if not (PINECONE_API_KEY and PINECONE_INDEX):
+        logger.warning("Pinecone API key or index not set; skipping vectorization")
+        return {"upserted": [], "deleted": []}
+    if not SEARCH_ENABLED:
+        logger.warning("Pinecone search disabled; skipping vectorization")
+        return {"upserted": [], "deleted": []}
     if pc is None or vector_index is None:
         init_pinecone()
+        if not SEARCH_ENABLED:
+            return {"upserted": [], "deleted": []}
     client = AsyncOpenAI(api_key=openai_api_key)
     current = scan_files()
     previous = load_vector_meta()
@@ -123,8 +164,16 @@ async def vectorize_all_files(openai_api_key, force=False, on_message=None):
     return {"upserted": upserted_ids, "deleted": deleted_ids}
 
 async def semantic_search(query, openai_api_key, top_k=5):
+    if not (PINECONE_API_KEY and PINECONE_INDEX):
+        logger.warning("Pinecone API key or index not set; semantic search disabled")
+        return []
+    if not SEARCH_ENABLED:
+        logger.warning("Pinecone search disabled; semantic search unavailable")
+        return []
     if pc is None or vector_index is None:
         init_pinecone()
+        if not SEARCH_ENABLED:
+            return []
     client = AsyncOpenAI(api_key=openai_api_key)
     emb = await safe_embed(query, client)
     res = vector_index.query(vector=emb, top_k=top_k, include_metadata=True)
