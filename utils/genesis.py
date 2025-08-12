@@ -1,5 +1,5 @@
 import threading
-import time
+import asyncio
 import random
 import datetime
 import requests
@@ -77,29 +77,33 @@ class AriannaGenesis:
         self._impressions_today = []
         self._date_last_run = None
 
-    def run(self):
+    async def run(self, timeout: float | None = None):
         """
         Главный ежедневный цикл: три события в разные часы, каждый день новые времена.
         Защита от лупов: не сработает дважды в сутки.
         """
-        while True:
-            now = datetime.datetime.now()
-            today = now.date()
-            if self._date_last_run == today:
-                self._sleep_until_next_day()
-                continue
-            self._date_last_run = today
 
-            schedule = self._plan_today(now)
-            for event_time, func in schedule:
-                to_wait = (event_time - datetime.datetime.now()).total_seconds()
-                if to_wait > 0:
-                    time.sleep(to_wait)
-                try:
-                    func()
-                except Exception as e:
-                    self._log(f"[AriannaGenesis] Error in {func.__name__}: {e}")
-            self._sleep_until_next_day()
+        async def loop():
+            while True:
+                now = datetime.datetime.now()
+                today = now.date()
+                if self._date_last_run == today:
+                    await self._sleep_until_next_day()
+                    continue
+                self._date_last_run = today
+
+                schedule = self._plan_today(now)
+                for event_time, func in schedule:
+                    to_wait = (event_time - datetime.datetime.now()).total_seconds()
+                    if to_wait > 0:
+                        await asyncio.sleep(to_wait)
+                    try:
+                        func()
+                    except Exception as e:
+                        self._log(f"[AriannaGenesis] Error in {func.__name__}: {e}")
+                await self._sleep_until_next_day()
+
+        await asyncio.wait_for(loop(), timeout=timeout)
 
     def _plan_today(self, now):
         reddit_time = self._random_time_between(now, 9, 15)
@@ -119,11 +123,11 @@ class AriannaGenesis:
         s = random.randint(0, 59)
         return now.replace(hour=h, minute=m, second=s, microsecond=0)
 
-    def _sleep_until_next_day(self):
+    async def _sleep_until_next_day(self):
         now = datetime.datetime.now()
         next_day = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         to_sleep = max(1, (next_day - now).total_seconds())
-        time.sleep(to_sleep)
+        await asyncio.sleep(to_sleep)
 
     def impressionist_search_resonance(self):
         """
@@ -281,6 +285,6 @@ class AriannaGenesis:
     def _send_direct(self, user_id, text):
         self._async_send(user_id, text)
 
-# === Для запуска в server.py (синхронно!) ===
+# === Для запуска в server.py ===
 # genesis = AriannaGenesis(GROUP_ID, CREATOR_CHAT_ID, PINECONE_API_KEY, PINECONE_INDEX, CHRONICLE_PATH)
-# threading.Thread(target=genesis.run, daemon=True).start()
+# asyncio.create_task(genesis.run())
