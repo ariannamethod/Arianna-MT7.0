@@ -22,6 +22,7 @@ from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
+from utils.genesis_service import start_genesis_service
 
 logging.basicConfig(level=logging.INFO)
 
@@ -333,6 +334,7 @@ async def main():
         logger.exception("Assistant initialization failed")
         init_failed = True
 
+    start_genesis_service()
     app = web.Application()
     path = f"/webhook/{BOT_TOKEN}"
     if init_failed:
