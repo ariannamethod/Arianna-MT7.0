@@ -4,7 +4,9 @@ import asyncio
 import random
 import logging
 import tempfile
-from collections import Counter
+import time
+
+import redis.asyncio as redis
 
 import openai
 from pydub import AudioSegment
@@ -40,26 +42,36 @@ VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
 
-# --- simple per-user rate limiting ---
+# --- Redis-backed per-user rate limiting ---
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
 RATE_LIMIT_INTERVAL = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
-_message_counts = Counter()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+_redis = redis.from_url(REDIS_URL, decode_responses=True)
 
 
 async def rate_limited(user_id: str) -> bool:
     """Return True if under limit; otherwise False."""
-    if _message_counts[user_id] >= RATE_LIMIT_MAX:
-        return False
-    _message_counts[user_id] += 1
-
-    async def decrement():
-        await asyncio.sleep(RATE_LIMIT_INTERVAL)
-        _message_counts[user_id] -= 1
-        if _message_counts[user_id] <= 0:
-            del _message_counts[user_id]
-
-    create_task(decrement())
-    return True
+    key = f"rl:{user_id}"
+    now = time.time()
+    window_start = now - RATE_LIMIT_INTERVAL
+    try:
+        async with _redis.pipeline() as pipe:
+            pipe.zadd(key, {str(now): now})
+            pipe.zremrangebyscore(key, 0, window_start)
+            pipe.zcard(key)
+            pipe.expire(key, RATE_LIMIT_INTERVAL)
+            _, _, count, _ = await pipe.execute()
+    except Exception as e:
+        logger.exception("Rate limiter error for user %s: %s", user_id, e)
+        return True
+    if count > RATE_LIMIT_MAX:
+        logger.warning(
+            "Rate limit exceeded for user %s (%d > %d)",
+            user_id,
+            count,
+            RATE_LIMIT_MAX,
+        )
+    return count <= RATE_LIMIT_MAX
 
 # --- optional behavior tuning ---
 GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
