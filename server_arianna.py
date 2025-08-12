@@ -4,6 +4,7 @@ import asyncio
 import random
 import logging
 import tempfile
+from collections import Counter
 
 import openai
 from pydub import AudioSegment
@@ -37,6 +38,27 @@ INDEX_CMD = "/index"
 VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
+
+# --- simple per-user rate limiting ---
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
+RATE_LIMIT_INTERVAL = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
+_message_counts = Counter()
+
+
+async def rate_limited(user_id: str) -> bool:
+    """Return True if under limit; otherwise False."""
+    if _message_counts[user_id] >= RATE_LIMIT_MAX:
+        return False
+    _message_counts[user_id] += 1
+
+    async def decrement():
+        await asyncio.sleep(RATE_LIMIT_INTERVAL)
+        _message_counts[user_id] -= 1
+        if _message_counts[user_id] <= 0:
+            del _message_counts[user_id]
+
+    asyncio.create_task(decrement())
+    return True
 
 # --- optional behavior tuning ---
 GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
@@ -146,6 +168,9 @@ async def status(request):
 async def voice_messages(m: types.Message):
     is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
     user_id = str(m.from_user.id)
+    if not await rate_limited(user_id):
+        await m.answer("Too many requests. Please slow down.")
+        return
     thread_key = f"{m.chat.id}:{m.from_user.id}" if is_group else user_id
     with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
         await bot.download(m.voice.file_id, tmp.name)
@@ -162,6 +187,9 @@ async def voice_messages(m: types.Message):
 @dp.message(lambda m: True)
 async def all_messages(m: types.Message):
     user_id = str(m.from_user.id)
+    if not await rate_limited(user_id):
+        await m.answer("Too many requests. Please slow down.")
+        return
     text    = m.text or ""
 
     # Semantic search
