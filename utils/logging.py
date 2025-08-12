@@ -4,7 +4,10 @@ import re
 import contextvars
 from typing import Any, Dict
 
-import structlog
+try:
+    import structlog
+except ModuleNotFoundError:  # pragma: no cover - fallback when structlog is missing
+    structlog = None  # type: ignore[assignment]
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -38,21 +41,24 @@ def set_request_id(request_id: str | None) -> None:
 
 def configure_logging() -> None:
     logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(message)s")
-    structlog.configure(
-        processors=[
-            add_request_id,
-            mask_sensitive_data,
-            structlog.stdlib.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
-        ],
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
-    )
+    if structlog:
+        structlog.configure(
+            processors=[
+                add_request_id,
+                mask_sensitive_data,
+                structlog.stdlib.add_log_level,
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.processors.JSONRenderer(),
+            ],
+            context_class=dict,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            wrapper_class=structlog.stdlib.BoundLogger,
+            cache_logger_on_first_use=True,
+        )
 
-def get_logger(name: str | None = None) -> structlog.BoundLogger:
-    return structlog.get_logger(name)
+def get_logger(name: str | None = None) -> Any:
+    if structlog:
+        return structlog.get_logger(name)
+    return logging.getLogger(name)
 
 configure_logging()
