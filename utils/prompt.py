@@ -1,4 +1,12 @@
+import os
+import logging
+
 import tiktoken
+
+# Configure logging level from environment variable
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # SYSTEM / AGENT PROMPT FOR ARIANNA (ANCHOR PROTOCOL v7.0, Monday-compatible)
@@ -95,7 +103,5 @@ def build_system_prompt(
     if len(tokens) > MAX_TOKENS:
         full_prompt = enc.decode(tokens[:MAX_TOKENS])
 
-    # (For debug)
-    print("=== ARIANNA ANCHOR SYSTEM PROMPT ===")
-    print(full_prompt[:1000])
+    logger.debug("=== ARIANNA ANCHOR SYSTEM PROMPT ===\n%s", full_prompt[:1000])
     return full_prompt
