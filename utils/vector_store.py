@@ -3,6 +3,7 @@ import glob
 import json
 import hashlib
 import time
+import asyncio
 from typing import Optional, Any
 
 from utils.logging import get_logger
@@ -185,7 +186,8 @@ class VectorStore:
                 meta_id = f"{fname}:{idx}"
                 try:
                     emb = await safe_embed(chunk, self.openai_client)
-                    self._index.upsert(
+                    await asyncio.to_thread(
+                        self._index.upsert,
                         vectors=[
                             {
                                 "id": meta_id,
@@ -196,7 +198,7 @@ class VectorStore:
                                     "hash": current[fname],
                                 },
                             }
-                        ]
+                        ],
                     )
                     upserted_ids.append(meta_id)
                 except PineconeException as e:
@@ -211,7 +213,7 @@ class VectorStore:
             for idx in range(50):
                 meta_id = f"{fname}:{idx}"
                 try:
-                    self._index.delete(ids=[meta_id])
+                    await asyncio.to_thread(self._index.delete, ids=[meta_id])
                     deleted_ids.append(meta_id)
                 except Exception:  # pragma: no cover - best effort
                     continue
@@ -245,8 +247,11 @@ class VectorStore:
             return []
 
         try:
-            res = self._index.query(
-                vector=emb, top_k=top_k, include_metadata=True
+            res = await asyncio.to_thread(
+                self._index.query,
+                vector=emb,
+                top_k=top_k,
+                include_metadata=True,
             )
         except Exception as e:  # pragma: no cover - logging
             logger.error("Query failed: %s", e)
