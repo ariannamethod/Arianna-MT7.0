@@ -32,7 +32,7 @@ Several optional variables fine‑tune the bot's behavior:
 
 - `GROUP_DELAY_MIN`/`GROUP_DELAY_MAX` – range in seconds to wait before replying in groups (default 120–360).
 - `PRIVATE_DELAY_MIN`/`PRIVATE_DELAY_MAX` – range for private chats (default 10–40).
-- `SKIP_SHORT_PROB` – chance to ignore very short or non‑question messages (default 0.75).
+- `SKIP_SHORT_PROB` – chance to ignore very short or non‑question messages. Set to e.g. `0.3` in `.env`; defaults to `0` (do not skip) if unset.
 - `FOLLOWUP_PROB` – probability of sending a follow‑up later (default 0.2).
 - `FOLLOWUP_DELAY_MIN`/`FOLLOWUP_DELAY_MAX` – delay range for follow‑ups in seconds (default 900–7200).
 - `SUPPERTIME_DATA_PATH` – directory with SUPPERTIME chapters for the resonator (default `./data/chapters`).
