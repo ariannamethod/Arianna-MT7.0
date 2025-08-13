@@ -78,7 +78,7 @@ GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
 GROUP_DELAY_MAX   = int(os.getenv("GROUP_DELAY_MAX", 360))   # 6 minutes
 PRIVATE_DELAY_MIN = int(os.getenv("PRIVATE_DELAY_MIN", 10))  # 10 seconds
 PRIVATE_DELAY_MAX = int(os.getenv("PRIVATE_DELAY_MAX", 40))  # 40 seconds
-SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0.75))
+SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0))
 FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
 FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
 FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
@@ -212,6 +212,12 @@ async def voice_messages(m: types.Message):
         text = await append_link_snippets(text)
         if len(text.split()) < 4 or '?' not in text:
             if random.random() < SKIP_SHORT_PROB:
+                logger.info(
+                    "Skipping short voice message from user %s in chat %s: %r",
+                    user_id,
+                    m.chat.id,
+                    text[:100],
+                )
                 return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
             resp = await engine.ask(thread_key, text, is_group=is_group)
@@ -318,6 +324,12 @@ async def all_messages(m: types.Message):
 
     if len(text.split()) < 4 or '?' not in text:
         if random.random() < SKIP_SHORT_PROB:
+            logger.info(
+                "Skipping short message from user %s in chat %s: %r",
+                user_id,
+                m.chat.id,
+                text[:100],
+            )
             return
 
     thread_key = user_id
