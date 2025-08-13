@@ -209,8 +209,9 @@ class AriannaEngine:
         max_attempts: int = 5,
         **kwargs,
     ) -> httpx.Response:
-        """Perform an HTTP request with exponential backoff on 4xx/5xx."""
+        """Perform an HTTP request with exponential backoff."""
         delay = 0.5
+        retry_statuses = {408, 429, 500, 502, 503, 504}
         for attempt in range(max_attempts):
             try:
                 resp = await client.request(
@@ -227,18 +228,53 @@ class AriannaEngine:
                 raise
             if resp.status_code < 400:
                 return resp
-            if attempt < max_attempts - 1:
-                self.logger.warning(
-                    "%s %s failed with status %s; retrying in %.1fs",
+            if resp.status_code in retry_statuses:
+                if attempt < max_attempts - 1:
+                    log_method = "Server" if resp.status_code >= 500 else "Client"
+                    self.logger.warning(
+                        "%s error for %s %s: %s; retrying in %.1fs",
+                        log_method,
+                        method,
+                        url,
+                        resp.status_code,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 8)
+                    continue
+            elif 400 <= resp.status_code < 500:
+                self.logger.error(
+                    "Client error for %s %s: %s",
                     method,
                     url,
                     resp.status_code,
-                    delay,
                 )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 8)
-                continue
-            resp.raise_for_status()
+                resp.raise_for_status()
+                return resp
+            if resp.status_code >= 500 and resp.status_code not in retry_statuses:
+                self.logger.error(
+                    "Server error for %s %s: %s",
+                    method,
+                    url,
+                    resp.status_code,
+                )
+                resp.raise_for_status()
+                return resp
+        if resp.status_code >= 500:
+            self.logger.error(
+                "Server error for %s %s: %s",
+                method,
+                url,
+                resp.status_code,
+            )
+        else:
+            self.logger.error(
+                "Client error for %s %s: %s",
+                method,
+                url,
+                resp.status_code,
+            )
+        resp.raise_for_status()
         return resp
 
     async def ask(self, thread_key: str, prompt: str, is_group: bool=False) -> str:
