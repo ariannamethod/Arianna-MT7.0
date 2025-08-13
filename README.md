@@ -59,7 +59,7 @@ DeepSeek integration before launching the bot.
 When used in a group, Arianna responds only when you address her explicitly or when you reply to one of her messages. The following triggers are recognized:
 
 - `arianna`
-- `Арианна`
+- any case form of `Арианна` (e.g. `Арианну`, `Арианны`, `Арианне`)
 - `@<bot_username>`
 
 Replying to one of Arianna's messages counts as addressing her as well.

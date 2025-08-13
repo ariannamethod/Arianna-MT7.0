@@ -298,7 +298,7 @@ async def all_messages(m: types.Message):
     if not is_group:
         mentioned = True
     else:
-        if re.search(r"\b(arianna|арианна)\b", text, re.I):
+        if re.search(r"\b(arianna|арианн[ауые])\b", text, re.I):
             mentioned = True
         elif BOT_USERNAME and f"@{BOT_USERNAME}".lower() in text.lower():
             mentioned = True
