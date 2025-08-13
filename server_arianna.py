@@ -221,17 +221,26 @@ async def voice_messages(m: types.Message):
         await m.answer("Too many requests. Please slow down.")
         return
     thread_key = f"{m.chat.id}:{m.from_user.id}" if is_group else user_id
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
+    try:
         await bot.download(m.voice.file_id, tmp.name)
-    text = await transcribe_voice(tmp.name)
-    os.remove(tmp.name)
-    text = await append_link_snippets(text)
-    if len(text.split()) < 4 or '?' not in text:
-        if random.random() < SKIP_SHORT_PROB:
-            return
-    async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-        resp = await engine.ask(thread_key, text, is_group=is_group)
-        create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
+        text = await transcribe_voice(tmp.name)
+        text = await append_link_snippets(text)
+        if len(text.split()) < 4 or '?' not in text:
+            if random.random() < SKIP_SHORT_PROB:
+                return
+        async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
+            resp = await engine.ask(thread_key, text, is_group=is_group)
+            create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
+    except Exception as e:
+        logger.exception("Error processing voice message: %s", e)
+        await m.answer("Sorry, I couldn't process your voice message.")
+    finally:
+        tmp.close()
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
 
 @dp.message(lambda m: True)
 async def all_messages(m: types.Message):
