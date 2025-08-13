@@ -20,7 +20,7 @@ from utils.text_helpers import extract_text_from_url
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
-from utils.genesis_service import start_genesis_service
+from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.logging import get_logger, set_request_id
 
 logger = get_logger(__name__)
@@ -361,29 +361,32 @@ async def main():
         init_failed = True
 
     start_genesis_service()
-    app = web.Application()
-    path = f"/webhook/{BOT_TOKEN}"
-    if init_failed:
-        async def failed(request):
-            return web.Response(status=500, text="Initialization failed")
-        app.router.add_route("*", path, failed)
-        app.router.add_route("*", "/webhook", failed)
-    else:
-        handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-        handler.register(app, path=path)
-        handler.register(app, path="/webhook")
-        setup_application(app, dp)
+    try:
+        app = web.Application()
+        path = f"/webhook/{BOT_TOKEN}"
+        if init_failed:
+            async def failed(request):
+                return web.Response(status=500, text="Initialization failed")
+            app.router.add_route("*", path, failed)
+            app.router.add_route("*", "/webhook", failed)
+        else:
+            handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+            handler.register(app, path=path)
+            handler.register(app, path="/webhook")
+            setup_application(app, dp)
 
-    # Register health check routes
-    app.router.add_get("/healthz", healthz)
-    app.router.add_get("/status", status)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Arianna webhook started", port=port)
-    await asyncio.Event().wait()
+        # Register health check routes
+        app.router.add_get("/healthz", healthz)
+        app.router.add_get("/status", status)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.getenv("PORT", 8000))
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        logger.info("Arianna webhook started", port=port)
+        await asyncio.Event().wait()
+    finally:
+        stop_genesis_service()
 
 if __name__ == "__main__":
     asyncio.run(main())
