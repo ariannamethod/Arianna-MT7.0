@@ -44,33 +44,17 @@ VOICE_ENABLED = load_voice_state()
 # --- Redis-backed counters and rate limiting ---
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
 RATE_LIMIT_INTERVAL = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
-COUNTER_TTL = int(os.getenv("COUNTER_TTL", 60))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
 
 
-async def increment_counter(key: str, ttl: int = COUNTER_TTL) -> int:
+async def increment_counter(key: str, ttl: int) -> int:
     """Atomically increment a counter and set/update its TTL."""
     async with _redis.pipeline(transaction=True) as pipe:
         pipe.incr(key)
         pipe.expire(key, ttl)
         count, _ = await pipe.execute()
     return count
-
-
-async def decrement_counter(key: str, ttl: int = COUNTER_TTL) -> int:
-    """Atomically decrement a counter and set/update its TTL."""
-    async with _redis.pipeline(transaction=True) as pipe:
-        pipe.decr(key)
-        pipe.expire(key, ttl)
-        count, _ = await pipe.execute()
-    return count
-
-
-async def clear_counter(key: str) -> None:
-    """Remove a counter entirely."""
-    await _redis.delete(key)
-
 
 async def rate_limited(user_id: str) -> bool:
     """Return True if under limit; otherwise False."""
