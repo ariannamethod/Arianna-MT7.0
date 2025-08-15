@@ -1,6 +1,7 @@
 import difflib
 import os
 import asyncio
+import re
 from urllib.parse import urlparse
 
 import aiohttp
@@ -26,6 +27,35 @@ async def _get_session() -> aiohttp.ClientSession:
 def fuzzy_match(a, b):
     """Return similarity ratio between two strings."""
     return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _extract_links(text: str, allowed_domains: set[str] | None = None, keywords: set[str] | None = None) -> list[str]:
+    """Return list of http(s) links found in ``text`` filtered by domains and keywords."""
+    allowed_domains = {d.lower() for d in (allowed_domains or [])}
+    keywords = {k.lower() for k in (keywords or [])}
+
+    soup = BeautifulSoup(text, "html.parser")
+    links = [a.get("href") for a in soup.find_all("a", href=True)]
+    if not links:
+        links = re.findall(r"https?://\S+", text)
+
+    seen = set()
+    valid: list[str] = []
+    for link in links:
+        if not isinstance(link, str):
+            continue
+        parsed = urlparse(link)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        domain = parsed.hostname.lower() if parsed.hostname else ""
+        if allowed_domains and domain not in allowed_domains:
+            continue
+        if keywords and not any(k in link.lower() for k in keywords):
+            continue
+        if link not in seen:
+            valid.append(link)
+            seen.add(link)
+    return valid
 
 async def extract_text_from_url(url):
     """Fetches a web page asynchronously and returns visible text."""

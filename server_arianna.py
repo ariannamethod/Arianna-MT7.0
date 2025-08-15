@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 import random
 import tempfile
@@ -17,7 +16,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from utils.arianna_engine import AriannaEngine
 from utils.split_message import split_message
 from utils.vector_store import VectorStore
-from utils.text_helpers import extract_text_from_url
+from utils.text_helpers import extract_text_from_url, _extract_links
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
@@ -117,13 +116,9 @@ FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
 FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
 FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
 
-# Regex for detecting links
-URL_REGEX = re.compile(r"https://\S+")
-
-
 async def append_link_snippets(text: str) -> str:
     """Append snippet from any https:// link in the text."""
-    urls = URL_REGEX.findall(text)[:3]
+    urls = _extract_links(text)[:3]
     if not urls:
         return text
     parts = [text]
