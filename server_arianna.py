@@ -22,6 +22,7 @@ from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
 from utils.genesis_service import start_genesis_service, stop_genesis_service
+from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
 from utils.logging import get_logger, set_request_id
 
 logger = get_logger(__name__)
@@ -395,6 +396,7 @@ async def main():
         init_failed = True
 
     start_genesis_service()
+    start_snapshot_service()
     try:
         app = web.Application()
         path = f"/webhook/{BOT_TOKEN}"
@@ -421,6 +423,7 @@ async def main():
         await asyncio.Event().wait()
     finally:
         stop_genesis_service()
+        stop_snapshot_service()
 
 if __name__ == "__main__":
     asyncio.run(main())
