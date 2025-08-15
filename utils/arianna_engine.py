@@ -37,29 +37,50 @@ class AriannaEngine:
         schema = genesis_tool_schema()  # схема функции GENESIS
 
         payload = {
-            "name":        "Arianna-Core-Assistant",
+            "name": "Arianna-Core-Assistant",
             "instructions": system_prompt,
-            "model":       "gpt-4.1",      # мощное ядро по твоему желанию
-            "tools":       [schema],
-            "tool_resources": {}
+            "model": "gpt-4.1",  # мощное ядро по твоему желанию
+            "tools": [schema],
+            "tool_resources": {},
         }
 
+        url = "https://api.openai.com/v1/assistants"
         async with httpx.AsyncClient() as client:
             try:
                 r = await client.post(
-                    "https://api.openai.com/v1/assistants",
+                    url,
                     headers=self.headers,
                     json=payload,
                     timeout=self.request_timeout,
                 )
                 r.raise_for_status()
             except httpx.TimeoutException:
-                self.logger.error("OpenAI request timed out during assistant setup")
+                self.logger.error(
+                    "OpenAI request timed out during assistant setup url=%s params=%s",
+                    url,
+                    payload,
+                )
                 return "OpenAI request timed out. Please try again later."
-            except Exception as e:
-                self.logger.error("Failed to create Arianna Assistant", exc_info=e)
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code if e.response else None
+                body = truncate_body(e.response.text if e.response else None)
+                self.logger.error(
+                    "Failed to create Arianna Assistant url=%s params=%s status=%s body=%s",
+                    url,
+                    payload,
+                    status,
+                    body,
+                    exc_info=e,
+                )
                 return f"Failed to create Arianna Assistant: {e}"
-
+            except Exception as e:
+                self.logger.error(
+                    "Failed to create Arianna Assistant url=%s params=%s",
+                    url,
+                    payload,
+                    exc_info=e,
+                )
+                return f"Failed to create Arianna Assistant: {e}"
             self.assistant_id = r.json()["id"]
             self.logger.info(f"✅ Arianna Assistant created: {self.assistant_id}")
         return self.assistant_id
@@ -76,18 +97,36 @@ class AriannaEngine:
     async def _get_thread(self, key: str) -> str:
         """Get or create a thread for the given key."""
         if key not in self.threads:
+            url = "https://api.openai.com/v1/threads"
+            payload = {"metadata": {"thread_key": key}}
             async with httpx.AsyncClient() as client:
                 try:
                     r = await client.post(
-                        "https://api.openai.com/v1/threads",
+                        url,
                         headers=self.headers,
-                        json={"metadata": {"thread_key": key}},
+                        json=payload,
                         timeout=self.request_timeout,
                     )
                     r.raise_for_status()
                     self.threads[key] = r.json()["id"]
                 except httpx.TimeoutException:
-                    self.logger.error("OpenAI request timed out when creating thread")
+                    self.logger.error(
+                        "OpenAI request timed out when creating thread url=%s params=%s",
+                        url,
+                        payload,
+                    )
+                    raise
+                except httpx.HTTPStatusError as e:
+                    status = e.response.status_code if e.response else None
+                    body = truncate_body(e.response.text if e.response else None)
+                    self.logger.error(
+                        "Failed to create thread url=%s params=%s status=%s body=%s",
+                        url,
+                        payload,
+                        status,
+                        body,
+                        exc_info=e,
+                    )
                     raise
             save_threads(self.threads)
         return self.threads[key]
@@ -109,18 +148,24 @@ class AriannaEngine:
                             .get("submit_tool_outputs", {}).get("tool_calls", [])
                         if tool_calls:
                             output = await handle_genesis_call(tool_calls)
+                            tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
+                            payload = {"tool_outputs": [{
+                                "tool_call_id": tool_calls[0]["id"],
+                                "output": output
+                            }]}
                             try:
                                 await client.post(
-                                    f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs",
+                                    tool_url,
                                     headers=self.headers,
-                                    json={"tool_outputs": [{
-                                        "tool_call_id": tool_calls[0]["id"],
-                                        "output": output
-                                    }]},
+                                    json=payload,
                                     timeout=self.request_timeout,
                                 )
                             except httpx.TimeoutException:
-                                self.logger.error("Timeout submitting tool outputs")
+                                self.logger.error(
+                                    "Timeout submitting tool outputs url=%s params=%s",
+                                    tool_url,
+                                    payload,
+                                )
                                 raise
                             # After handling tools, restart streaming
                             return False
@@ -143,15 +188,22 @@ class AriannaEngine:
             try:
                 st = await client.get(url, headers=self.headers, timeout=self.request_timeout)
             except httpx.TimeoutException:
-                self.logger.error("OpenAI request timed out while polling run status")
+                self.logger.error(
+                    "OpenAI request timed out while polling run status url=%s",
+                    url,
+                )
                 raise
             if st.status_code == 429:
                 attempts += 1
                 if attempts >= max_attempts:
                     break
                 self.logger.warning(
-                    "Rate limited polling run %s; retrying in %.1fs (attempt %s/%s)",
-                    run_id, delay, attempts, max_attempts,
+                    "Rate limited polling run %s; retrying in %.1fs (attempt %s/%s) url=%s",
+                    run_id,
+                    delay,
+                    attempts,
+                    max_attempts,
+                    url,
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 8)
@@ -161,27 +213,43 @@ class AriannaEngine:
             if status is None:
                 error_info = run_json.get("error")
                 if error_info:
-                    self.logger.error("Run %s returned error while polling: %s", run_id, error_info)
+                    self.logger.error(
+                        "Run %s returned error while polling: %s url=%s",
+                        run_id,
+                        error_info,
+                        url,
+                    )
                 else:
-                    self.logger.error("Run %s returned malformed response without status: %s", run_id, run_json)
+                    self.logger.error(
+                        "Run %s returned malformed response without status: %s url=%s",
+                        run_id,
+                        run_json,
+                        url,
+                    )
                 raise RuntimeError(f"Run {run_id} missing status")
             if status == "requires_action":
                 tool_calls = run_json.get("required_action", {}) \
                     .get("submit_tool_outputs", {}).get("tool_calls", [])
                 if tool_calls:
                     output = await handle_genesis_call(tool_calls)
+                    tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
+                    payload = {"tool_outputs": [{
+                        "tool_call_id": tool_calls[0]["id"],
+                        "output": output
+                    }]}
                     try:
                         await client.post(
-                            f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs",
+                            tool_url,
                             headers=self.headers,
-                            json={"tool_outputs": [{
-                                "tool_call_id": tool_calls[0]["id"],
-                                "output": output
-                            }]},
+                            json=payload,
                             timeout=self.request_timeout,
                         )
                     except httpx.TimeoutException:
-                        self.logger.error("Timeout submitting tool outputs")
+                        self.logger.error(
+                            "Timeout submitting tool outputs url=%s params=%s",
+                            tool_url,
+                            payload,
+                        )
                         raise
                     # Reset backoff after action
                     attempts = 0
@@ -190,7 +258,12 @@ class AriannaEngine:
             if status == "completed":
                 return
             if status in {"failed", "cancelled"}:
-                self.logger.error("Run %s ended with status %s", run_id, status)
+                self.logger.error(
+                    "Run %s ended with status %s url=%s",
+                    run_id,
+                    status,
+                    url,
+                )
                 raise RuntimeError(f"Run {run_id} {status}")
             attempts += 1
             if attempts >= max_attempts:
@@ -198,7 +271,11 @@ class AriannaEngine:
             self.logger.debug("Run %s not complete, retrying in %.1fs", run_id, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 8)
-        self.logger.error("Exceeded max polling attempts for run %s", run_id)
+        self.logger.error(
+            "Exceeded max polling attempts for run %s url=%s",
+            run_id,
+            url,
+        )
         raise TimeoutError("AriannaEngine.ask() polling exceeded max attempts")
 
     async def _request_with_retry(
@@ -222,8 +299,12 @@ class AriannaEngine:
                     **kwargs,
                 )
             except httpx.TimeoutException:
+                payload = kwargs.get("json") or kwargs.get("params") or kwargs.get("data")
                 self.logger.error(
-                    "OpenAI request timed out for %s %s", method, url
+                    "OpenAI request timed out for %s %s params=%s",
+                    method,
+                    url,
+                    payload,
                 )
                 raise
             if resp.status_code < 400:
@@ -232,47 +313,57 @@ class AriannaEngine:
                 if attempt < max_attempts - 1:
                     log_method = "Server" if resp.status_code >= 500 else "Client"
                     self.logger.warning(
-                        "%s error for %s %s: %s; retrying in %.1fs",
+                        "%s error for %s %s: %s; retrying in %.1fs params=%s body=%s",
                         log_method,
                         method,
                         url,
                         resp.status_code,
                         delay,
+                        kwargs.get("json") or kwargs.get("params") or kwargs.get("data"),
+                        truncate_body(resp.text),
                     )
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 8)
                     continue
             elif 400 <= resp.status_code < 500:
                 self.logger.error(
-                    "Client error for %s %s: %s",
+                    "Client error for %s %s: %s params=%s body=%s",
                     method,
                     url,
                     resp.status_code,
+                    kwargs.get("json") or kwargs.get("params") or kwargs.get("data"),
+                    truncate_body(resp.text),
                 )
                 resp.raise_for_status()
                 return resp
             if resp.status_code >= 500 and resp.status_code not in retry_statuses:
                 self.logger.error(
-                    "Server error for %s %s: %s",
+                    "Server error for %s %s: %s params=%s body=%s",
                     method,
                     url,
                     resp.status_code,
+                    kwargs.get("json") or kwargs.get("params") or kwargs.get("data"),
+                    truncate_body(resp.text),
                 )
                 resp.raise_for_status()
                 return resp
         if resp.status_code >= 500:
             self.logger.error(
-                "Server error for %s %s: %s",
+                "Server error for %s %s: %s params=%s body=%s",
                 method,
                 url,
                 resp.status_code,
+                kwargs.get("json") or kwargs.get("params") or kwargs.get("data"),
+                truncate_body(resp.text),
             )
         else:
             self.logger.error(
-                "Client error for %s %s: %s",
+                "Client error for %s %s: %s params=%s body=%s",
                 method,
                 url,
                 resp.status_code,
+                kwargs.get("json") or kwargs.get("params") or kwargs.get("data"),
+                truncate_body(resp.text),
             )
         resp.raise_for_status()
         return resp
@@ -286,53 +377,76 @@ class AriannaEngine:
 
         # Добавляем пользовательский запрос
         async with httpx.AsyncClient() as client:
+            msg_url = f"https://api.openai.com/v1/threads/{tid}/messages"
+            msg_payload = {
+                "role": "user",
+                "content": prompt,
+                "metadata": {"is_group": str(is_group)},
+            }
             try:
                 msg = await self._request_with_retry(
                     client,
                     "POST",
-                    f"https://api.openai.com/v1/threads/{tid}/messages",
-                    json={
-                        "role": "user",
-                        "content": prompt,
-                        "metadata": {"is_group": str(is_group)},
-                    },
+                    msg_url,
+                    json=msg_payload,
                 )
             except httpx.TimeoutException:
-                self.logger.error("OpenAI request timed out when posting message")
+                self.logger.error(
+                    "OpenAI request timed out when posting message url=%s params=%s",
+                    msg_url,
+                    msg_payload,
+                )
                 raise
             except Exception as e:
-                self.logger.error("Failed to post user message", exc_info=e)
+                self.logger.error(
+                    "Failed to post user message url=%s params=%s",
+                    msg_url,
+                    msg_payload,
+                    exc_info=e,
+                )
                 # Try to recreate the thread in case the ID became invalid
                 self.threads.pop(thread_key, None)
                 tid = await self._get_thread(thread_key)
+                msg_url = f"https://api.openai.com/v1/threads/{tid}/messages"
                 try:
                     msg = await self._request_with_retry(
                         client,
                         "POST",
-                        f"https://api.openai.com/v1/threads/{tid}/messages",
-                        json={
-                            "role": "user",
-                            "content": prompt,
-                            "metadata": {"is_group": str(is_group)},
-                        },
+                        msg_url,
+                        json=msg_payload,
                     )
                 except httpx.TimeoutException:
-                    self.logger.error("OpenAI request timed out after recreating thread")
+                    self.logger.error(
+                        "OpenAI request timed out after recreating thread url=%s params=%s",
+                        msg_url,
+                        msg_payload,
+                    )
                     raise
                 except Exception as e2:
-                    self.logger.error("Failed to post user message after recreating thread", exc_info=e2)
+                    self.logger.error(
+                        "Failed to post user message after recreating thread url=%s params=%s",
+                        msg_url,
+                        msg_payload,
+                        exc_info=e2,
+                    )
                     raise
 
             # Запускаем ассистента
+            run_url = f"https://api.openai.com/v1/threads/{tid}/runs"
+            run_payload = {"assistant_id": self.assistant_id}
             try:
                 run = await self._request_with_retry(
                     client,
                     "POST",
-                    f"https://api.openai.com/v1/threads/{tid}/runs",
-                    json={"assistant_id": self.assistant_id},
+                    run_url,
+                    json=run_payload,
                 )
             except httpx.TimeoutException:
-                self.logger.error("OpenAI request timed out when starting run")
+                self.logger.error(
+                    "OpenAI request timed out when starting run url=%s params=%s",
+                    run_url,
+                    run_payload,
+                )
                 raise
             run_id = run.json()["id"]
 
@@ -341,14 +455,18 @@ class AriannaEngine:
                 await self._poll_run(client, tid, run_id)
 
             # Получаем все tool_calls (если есть) и обычный контент
+            final_url = f"https://api.openai.com/v1/threads/{tid}/messages"
             try:
                 final = await self._request_with_retry(
                     client,
                     "GET",
-                    f"https://api.openai.com/v1/threads/{tid}/messages",
+                    final_url,
                 )
             except httpx.TimeoutException:
-                self.logger.error("Timeout when retrieving final message")
+                self.logger.error(
+                    "Timeout when retrieving final message url=%s",
+                    final_url,
+                )
                 raise
             msg = final.json()["data"][0]
             # Если ассистент вызвал функцию GENESIS:
