@@ -3,7 +3,7 @@ import random
 import datetime
 import httpx
 import os
-from urllib.parse import quote
+import openai
 
 from utils.logging import get_logger
 
@@ -14,6 +14,7 @@ PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 PINECONE_INDEX = os.environ.get("PINECONE_INDEX")
 CHRONICLE_PATH = os.environ.get("CHRONICLE_PATH", "./config/chronicle.log")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # — Темы для поиска
 SEARCH_TOPICS = [
@@ -142,7 +143,7 @@ class AriannaGenesis:
         """
         self._impressions_today = []
         for topic in SEARCH_TOPICS:
-            text, url = await self._search_and_fetch(topic)
+            text, url = await self._web_search_openai(topic)
             resonance = self._generate_impression(text, topic)
             entry = {
                 "topic": topic,
@@ -214,51 +215,43 @@ class AriannaGenesis:
             return short + ("..." if len(lines[0]) > 120 else "")
         return "[empty]"
 
-    async def _search_and_fetch(self, topic):
-        """
-        Простой поиск через Bing (или Google) и вытаскивание текста первой релевантной статьи.
-        Можно заменить на любой html-парсер или API.
-        """
-        query = f"{topic} reddit"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        url = f"https://www.bing.com/search?q={quote(query)}"
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(url, headers=headers)
-            links = self._extract_links(resp.text)
-            if links:
-                link = random.choice(links)
-                article_text = await self._fetch_url_text(link)
-                return article_text, link
-        except httpx.TimeoutException:
-            self._log("[AriannaGenesis] Bing search timeout")
-        except Exception as e:
-            self._log(f"[AriannaGenesis] Bing search error: {e}")
-        return "[не удалось найти текст для отклика]", url
+    async def _web_search_openai(self, topic: str):
+        """Поиск статьи через OpenAI web_search tool.
 
-    def _extract_links(self, html):
-        # На коленке: ищет ссылки на reddit или похожие статьи
-        import re
-        return re.findall(r'https://[^\s"]+?reddit[^\s"]+', html)
+        Возвращает найденный текст и URL или заглушки при ошибках.
+        """
+        if not OPENAI_API_KEY:
+            self._log("[AriannaGenesis] OPENAI_API_KEY is not set")
+            return "[web search unavailable]", ""
 
-    async def _fetch_url_text(self, url):
-        # Можно заменить на нормальный парсер, тут примитив — возвращает кусок html
+        client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+        prompt = f"Find an article about {topic} and provide a short extract."
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-            text = resp.text
-            # Просто вырезаем <title> и первые 500 символов
-            import re
-            title = re.findall(r'<title>(.*?)</title>', text)
-            body = re.sub('<[^<]+?>', '', text)
-            body = body.replace('\n', ' ').replace('\r', ' ')
-            return (title[0] + "\n" if title else "") + body[:500]
-        except httpx.TimeoutException:
-            self._log("[AriannaGenesis] fetch_url_text timeout")
-            return "[ошибка парсинга текста]"
+            resp = await client.responses.create(
+                model="gpt-4.1-mini",
+                input=prompt,
+                tools=[{"type": "web_search"}],
+                timeout=20,
+            )
+            data = resp.model_dump()
+            for item in data.get("output", []):
+                for content in item.get("content", []):
+                    if content.get("type") == "tool_result" and content.get("name") == "web_search":
+                        url = content.get("url", "")
+                        fragments = [
+                            p.get("text", "") for p in content.get("content", []) if p.get("type") == "text"
+                        ]
+                        text = "\n".join(fragments) if fragments else "[нет текста]"
+                        return text, url
+            for item in data.get("output", []):
+                for content in item.get("content", []):
+                    if content.get("type") == "output_text" and content.get("text"):
+                        return content["text"], ""
+        except asyncio.TimeoutError:
+            self._log("[AriannaGenesis] openai web search timeout")
         except Exception as e:
-            self._log(f"[AriannaGenesis] fetch_url_text error: {e}")
-            return "[ошибка парсинга текста]"
+            self._log(f"[AriannaGenesis] openai web search error: {e}")
+        return "[не удалось найти текст для отклика]", ""
 
     # === Логирование, отправка сообщений ===
 
