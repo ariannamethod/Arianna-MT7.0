@@ -1,25 +1,24 @@
-import os
-import json
-
-from .atomic_json import atomic_json_dump
-
-THREADS_PATH = "data/threads.json"
-
-
-def load_threads(path: str = THREADS_PATH) -> dict:
-    """Load stored thread mappings from JSON."""
-    if os.path.isfile(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+from .thread_db import (
+    THREAD_DB_PATH,
+    THREAD_JSON_PATH,
+    get_conn,
+    init_db,
+    load_thread_map,
+    migrate_from_json,
+    save_thread_map,
+)
 
 
-def save_threads(threads: dict, path: str = THREADS_PATH) -> None:
-    """Save thread mappings to JSON."""
-    try:
-        atomic_json_dump(path, threads, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+def load_threads(path: str = THREAD_DB_PATH, json_path: str = THREAD_JSON_PATH) -> dict:
+    """Load stored thread mappings from SQLite."""
+    with get_conn(path) as conn:
+        init_db(conn)
+        migrate_from_json(conn, json_path)
+        return load_thread_map(conn)
+
+
+def save_threads(threads: dict, path: str = THREAD_DB_PATH) -> None:
+    """Persist thread mappings into SQLite."""
+    with get_conn(path) as conn:
+        init_db(conn)
+        save_thread_map(conn, threads)
