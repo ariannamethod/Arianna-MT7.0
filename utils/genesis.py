@@ -4,6 +4,12 @@ import datetime
 import httpx
 import os
 import openai
+from bs4 import BeautifulSoup
+
+try:  # trafilatura may be absent in some environments
+    import trafilatura
+except Exception:  # pragma: no cover - optional dependency
+    trafilatura = None
 
 from utils.logging import get_logger, truncate_body
 
@@ -66,6 +72,51 @@ SIGNOFFS = [
 ]
 
 logger = get_logger(__name__)
+
+
+# --- helper network utilities -------------------------------------------------
+_http_client: httpx.AsyncClient | None = None
+
+
+async def _get_http_client() -> httpx.AsyncClient:
+    """Return a shared ``httpx.AsyncClient`` instance."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=10)
+    return _http_client
+
+
+def _extract_links(html: str) -> list[str]:
+    """Extract HTTP/HTTPS links from HTML or plain text."""
+    soup = BeautifulSoup(html, "html.parser")
+    links = [a.get("href") for a in soup.find_all("a", href=True)]
+    if not links:
+        links = [token for token in html.split() if token.startswith("http://") or token.startswith("https://")]
+    return links
+
+
+async def _fetch_url_text(url: str) -> str:
+    """Fetch and extract readable text from ``url`` using trafilatura/BeautifulSoup."""
+    try:
+        client = await _get_http_client()
+        resp = await client.get(url, follow_redirects=True)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:  # pragma: no cover - network errors
+        return f"[error loading page: {e}]"
+
+    if trafilatura is not None:
+        extracted = trafilatura.extract(html)
+        if extracted:
+            return extracted
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in ["script", "style", "header", "footer", "nav", "aside"]:
+        for el in soup.find_all(tag):
+            el.decompose()
+    text = soup.get_text(separator="\n")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
 
 
 class AriannaGenesis:
@@ -251,11 +302,23 @@ class AriannaGenesis:
                             p.get("text", "") for p in content.get("content", []) if p.get("type") == "text"
                         ]
                         text = "\n".join(fragments) if fragments else "[нет текста]"
+                        if url:
+                            fetched = await _fetch_url_text(url)
+                            return fetched, url
+                        links = _extract_links(text)
+                        if links:
+                            fetched = await _fetch_url_text(links[0])
+                            return fetched, links[0]
                         return text, url
             for item in data.get("output", []):
                 for content in item.get("content", []):
                     if content.get("type") == "output_text" and content.get("text"):
-                        return content["text"], ""
+                        text = content["text"]
+                        links = _extract_links(text)
+                        if links:
+                            fetched = await _fetch_url_text(links[0])
+                            return fetched, links[0]
+                        return text, ""
         except asyncio.TimeoutError:
             self._log("[AriannaGenesis] openai web search timeout")
         except Exception as e:

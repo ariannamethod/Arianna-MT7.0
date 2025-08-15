@@ -87,8 +87,9 @@ text with sensitive details masked.
 ### Semantic search
 
 Send `/search <query>` to look up relevant snippets from the Markdown files in
-`config/`. The bot responds with the closest matches. If you update the files,
-run `/index` to rebuild the search vectors.
+`config/`. The bot responds with the closest matches and caches results in
+Redis for a short time. If you update the files, run `/index` to rebuild the
+search vectors.
 
 ### Resonator chapters
 
@@ -109,8 +110,10 @@ OpenAI Whisper and answered with text-to-speech audio.
 ### URL snippets
 
 When a message includes an `https://` link, Arianna fetches a short excerpt of
-that page and appends it to your prompt before generating a reply. This gives
-the model more context from the referenced site.
+that page and appends it to your prompt before generating a reply. Pages are
+retrieved with a shared HTTP session and parsed with BeautifulSoup or
+`trafilatura` for cleaner text. Snippets are cached in Redis so repeated links
+won't trigger additional network requests.
 
 ### Delayed replies and follow-ups
 

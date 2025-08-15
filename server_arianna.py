@@ -2,8 +2,10 @@ import os
 import asyncio
 import random
 import tempfile
+import json
 
 import redis.asyncio as redis
+import aiohttp
 
 import openai
 from pydub import AudioSegment
@@ -80,6 +82,15 @@ RATE_LIMIT_INTERVAL = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis = redis.from_url(REDIS_URL, decode_responses=True)
 
+_http_session: aiohttp.ClientSession | None = None
+
+
+async def _get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+    return _http_session
+
 
 async def increment_counter(key: str, ttl: int) -> int:
     """Atomically increment a counter and set/update its TTL."""
@@ -122,17 +133,22 @@ async def append_link_snippets(text: str) -> str:
     if not urls:
         return text
     parts = [text]
-    tasks = [asyncio.wait_for(extract_text_from_url(url), timeout=10) for url in urls]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for url, result in zip(urls, results):
-        if isinstance(result, asyncio.TimeoutError):
-            logger.warning("Timeout fetching %s", url)
-            snippet = "[Timeout]"
-        elif isinstance(result, Exception):
-            logger.exception("Error loading page %s: %s", url, result)
-            snippet = f"[Error loading page: {result}]"
-        else:
-            snippet = result
+    session = await _get_http_session()
+    for url in urls:
+        cache_key = f"snip:{url}"
+        snippet = await _redis.get(cache_key)
+        if snippet is None:
+            try:
+                snippet = await asyncio.wait_for(
+                    extract_text_from_url(url, session=session), timeout=10
+                )
+                await _redis.set(cache_key, snippet, ex=3600)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout fetching %s", url)
+                snippet = "[Timeout]"
+            except Exception as e:
+                logger.exception("Error loading page %s: %s", url, e)
+                snippet = f"[Error loading page: {e}]"
         parts.append(f"\n[Snippet from {url}]\n{snippet[:500]}")
     return "\n".join(parts)
 
@@ -281,7 +297,13 @@ async def all_messages(m: types.Message):
         if not query:
             return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            chunks = await vector_store.semantic_search(query)
+            cache_key = f"search:{query}"
+            cached = await _redis.get(cache_key)
+            if cached is not None:
+                chunks = json.loads(cached)
+            else:
+                chunks = await vector_store.semantic_search(query)
+                await _redis.set(cache_key, json.dumps(chunks), ex=3600)
             if not chunks:
                 await m.answer("No relevant documents found.")
             else:
