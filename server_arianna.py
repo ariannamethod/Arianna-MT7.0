@@ -3,6 +3,9 @@ import re
 import asyncio
 import random
 import tempfile
+from datetime import datetime, timezone
+
+import httpx
 
 import redis.asyncio as redis
 
@@ -22,6 +25,7 @@ from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
 from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.logging import get_logger, set_request_id
+from utils.journal import search_journal
 
 logger = get_logger(__name__)
 
@@ -40,6 +44,7 @@ INDEX_CMD = "/index"
 VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
+OLD_REPLY_DAYS = int(os.getenv("OLD_REPLY_DAYS", 7))
 
 # --- Redis-backed counters and rate limiting ---
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
@@ -337,9 +342,54 @@ async def all_messages(m: types.Message):
         thread_key = str(m.chat.id)  # shared history for the whole group
 
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
+        context_parts: list[str] = []
+
+        if m.reply_to_message:
+            age = datetime.now(timezone.utc) - m.reply_to_message.date
+            if age.days > OLD_REPLY_DAYS:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        base = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatHistory"
+                        params_before = {
+                            "chat_id": m.chat.id,
+                            "message_id": m.reply_to_message.message_id,
+                            "offset": -10,
+                            "limit": 10,
+                        }
+                        params_after = {
+                            "chat_id": m.chat.id,
+                            "message_id": m.reply_to_message.message_id,
+                            "offset": 1,
+                            "limit": 10,
+                        }
+                        history: list[str] = []
+                        for params in (params_before, params_after):
+                            r = await client.get(base, params=params)
+                            data = r.json()
+                            for msg in data.get("result", {}).get("messages", []):
+                                t = msg.get("text") or msg.get("caption")
+                                if t:
+                                    history.append(t)
+                        if history:
+                            context_parts.append("Chat history:\n" + "\n".join(history))
+                except Exception as e:
+                    logger.exception("Failed to fetch chat history: %s", e)
+
+        try:
+            chunks = await vector_store.semantic_search(text, top_k=3)
+            if chunks:
+                context_parts.append("Relevant docs:\n" + "\n---\n".join(chunks))
+        except Exception as e:
+            logger.exception("Vector search failed: %s", e)
+
+        journal_hits = search_journal(text)
+        if journal_hits:
+            context_parts.append("Journal entries:\n" + "\n---\n".join(journal_hits))
+
+        context = "\n\n".join(context_parts)
         # Генерируем ответ через Assistants API
         prompt = await append_link_snippets(text)
-        resp = await engine.ask(thread_key, prompt, is_group=is_group)
+        resp = await engine.ask(thread_key, prompt, is_group=is_group, context=context)
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
 async def main():

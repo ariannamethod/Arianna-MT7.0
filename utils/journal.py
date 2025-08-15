@@ -39,3 +39,33 @@ def log_event(event: Dict) -> None:
         logger.info(json.dumps(safe_event, ensure_ascii=False))
     except Exception as e:
         logger.error("Failed to write journal", exc_info=e)
+
+
+def search_journal(query: str, limit: int = 5) -> list[str]:
+    """Return up to ``limit`` journal entries containing the query substring."""
+    if not os.path.exists(_JOURNAL_PATH):
+        return []
+    hits: list[str] = []
+    q = query.lower()
+    try:
+        with open(_JOURNAL_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+
+    for line in reversed(lines):
+        idx = line.find("{")
+        if idx == -1:
+            continue
+        try:
+            event = json.loads(line[idx:])
+        except json.JSONDecodeError:
+            continue
+        serialized = json.dumps(event, ensure_ascii=False).lower()
+        if q in serialized:
+            prompt = event.get("prompt", "")
+            reply = event.get("reply", "")
+            hits.append(f"prompt: {prompt}\nreply: {reply}")
+        if len(hits) >= limit:
+            break
+    return hits

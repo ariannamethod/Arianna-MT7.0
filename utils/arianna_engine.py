@@ -277,12 +277,21 @@ class AriannaEngine:
         resp.raise_for_status()
         return resp
 
-    async def ask(self, thread_key: str, prompt: str, is_group: bool=False) -> str:
+    async def ask(
+        self,
+        thread_key: str,
+        prompt: str,
+        is_group: bool = False,
+        context: str = "",
+    ) -> str:
         """
         Кладёт prompt в thread, запускает run, ждёт и возвращает ответ.
         Если ассистент запрашивает GENESIS-функцию — обрабатываем через handle_genesis_call().
+        Дополнительно можно передать контекст, который будет добавлен к пользовательскому сообщению.
         """
         tid = await self._get_thread(thread_key)
+
+        full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
         # Добавляем пользовательский запрос
         async with httpx.AsyncClient() as client:
@@ -293,7 +302,7 @@ class AriannaEngine:
                     f"https://api.openai.com/v1/threads/{tid}/messages",
                     json={
                         "role": "user",
-                        "content": prompt,
+                        "content": full_prompt,
                         "metadata": {"is_group": str(is_group)},
                     },
                 )
@@ -312,7 +321,7 @@ class AriannaEngine:
                         f"https://api.openai.com/v1/threads/{tid}/messages",
                         json={
                             "role": "user",
-                            "content": prompt,
+                            "content": full_prompt,
                             "metadata": {"is_group": str(is_group)},
                         },
                     )
