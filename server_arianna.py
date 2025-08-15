@@ -4,6 +4,7 @@ import random
 import tempfile
 
 import redis.asyncio as redis
+import re
 
 import openai
 from pydub import AudioSegment
@@ -23,6 +24,8 @@ from utils.tasks import create_task
 from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
 from utils.logging import get_logger, set_request_id
+from utils.history_store import log_message, get_context as get_history_context
+from utils.journal import search_journal
 
 logger = get_logger(__name__)
 
@@ -42,6 +45,34 @@ VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
 main_menu: types.ReplyKeyboardMarkup | None = None
+
+
+def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
+    """Helper to record an outgoing message."""
+    log_message(chat_id, msg.message_id, BOT_ID, BOT_USERNAME, text, "out")
+
+
+async def build_prompt(m: types.Message, text: str) -> str:
+    """Enrich the user message with history, vector store and journal context."""
+    parts = [text]
+    if m.reply_to_message:
+        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id)
+        if ctx:
+            formatted = "\n".join(
+                "User: " + c["text"] if c["direction"] == "in" else "Bot: " + c["text"]
+                for c in ctx
+            )
+            parts.append("[History]\n" + formatted)
+    try:
+        chunks = await vector_store.semantic_search(text)
+    except Exception:
+        chunks = []
+    if chunks:
+        parts.append("[VectorStore]\n" + "\n".join(chunks))
+    journal_hits = search_journal(text)
+    if journal_hits:
+        parts.append("[journal.log]\n" + "\n".join(journal_hits))
+    return "\n\n".join(parts)
 
 
 async def on_startup() -> None:
@@ -191,11 +222,15 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         if VOICE_ENABLED.get(m.chat.id):
             voice_path = await synthesize_voice(resp)
-            await m.answer_voice(types.FSInputFile(voice_path), caption=resp[:1024])
+            msg = await m.answer_voice(
+                types.FSInputFile(voice_path), caption=resp[:1024]
+            )
+            _log_outgoing(m.chat.id, msg, resp[:1024])
             os.remove(voice_path)
         else:
             for chunk in split_message(resp):
-                await m.answer(chunk)
+                msg = await m.answer(chunk)
+                _log_outgoing(m.chat.id, msg, chunk)
 
     if random.random() < FOLLOWUP_PROB:
         create_task(schedule_followup(m.chat.id, thread_key, is_group), track=True)
@@ -210,11 +245,15 @@ async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
         resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
         if VOICE_ENABLED.get(chat_id):
             voice_path = await synthesize_voice(resp)
-            await bot.send_voice(chat_id, types.FSInputFile(voice_path), caption=resp[:1024])
+            msg = await bot.send_voice(
+                chat_id, types.FSInputFile(voice_path), caption=resp[:1024]
+            )
+            _log_outgoing(chat_id, msg, resp[:1024])
             os.remove(voice_path)
         else:
             for chunk in split_message(resp):
-                await bot.send_message(chat_id, chunk)
+                msg = await bot.send_message(chat_id, chunk)
+                _log_outgoing(chat_id, msg, chunk)
 
 # --- health check routes ---
 async def healthz(request):
@@ -227,7 +266,16 @@ async def status(request):
 
 @dp.message(CommandStart())
 async def on_start(m: types.Message) -> None:
-    await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
+    log_message(
+        m.chat.id,
+        m.message_id,
+        m.from_user.id,
+        m.from_user.username,
+        m.text or "",
+        "in",
+    )
+    msg = await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
+    _log_outgoing(m.chat.id, msg, "Welcome! Choose a command:")
 
 
 @dp.message(lambda m: m.voice)
@@ -236,13 +284,30 @@ async def voice_messages(m: types.Message):
     is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
     user_id = str(m.from_user.id)
     if not await rate_limited(user_id):
-        await m.answer("Too many requests. Please slow down.")
+        log_message(
+            m.chat.id,
+            m.message_id,
+            m.from_user.id,
+            m.from_user.username,
+            "<voice>",
+            "in",
+        )
+        msg = await m.answer("Too many requests. Please slow down.")
+        _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
         return
     thread_key = f"{m.chat.id}:{m.from_user.id}" if is_group else user_id
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
     try:
         await bot.download(m.voice.file_id, tmp.name)
         text = await transcribe_voice(tmp.name)
+        log_message(
+            m.chat.id,
+            m.message_id,
+            m.from_user.id,
+            m.from_user.username,
+            text,
+            "in",
+        )
         text = await append_link_snippets(text)
         if len(text.split()) < 4 or '?' not in text:
             if random.random() < SKIP_SHORT_PROB:
@@ -253,12 +318,14 @@ async def voice_messages(m: types.Message):
                     text[:100],
                 )
                 return
+        prompt = await build_prompt(m, text)
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            resp = await engine.ask(thread_key, text, is_group=is_group)
+            resp = await engine.ask(thread_key, prompt, is_group=is_group)
             create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
     except Exception as e:
         logger.exception("Error processing voice message: %s", e)
-        await m.answer("Sorry, I couldn't process your voice message.")
+        msg = await m.answer("Sorry, I couldn't process your voice message.")
+        _log_outgoing(m.chat.id, msg, "Sorry, I couldn't process your voice message.")
     finally:
         tmp.close()
         try:
@@ -270,10 +337,19 @@ async def voice_messages(m: types.Message):
 async def all_messages(m: types.Message):
     set_request_id(f"{m.chat.id}:{m.message_id}")
     user_id = str(m.from_user.id)
+    text = m.text or ""
+    log_message(
+        m.chat.id,
+        m.message_id,
+        m.from_user.id,
+        m.from_user.username,
+        text,
+        "in",
+    )
     if not await rate_limited(user_id):
-        await m.answer("Too many requests. Please slow down.")
+        msg = await m.answer("Too many requests. Please slow down.")
+        _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
         return
-    text    = m.text or ""
 
     # Semantic search
     if text.strip().lower().startswith(SEARCH_CMD):
@@ -283,39 +359,47 @@ async def all_messages(m: types.Message):
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
             chunks = await vector_store.semantic_search(query)
             if not chunks:
-                await m.answer("No relevant documents found.")
+                msg = await m.answer("No relevant documents found.")
+                _log_outgoing(m.chat.id, msg, "No relevant documents found.")
             else:
                 for ch in chunks:
                     for part in split_message(ch):
-                        await m.answer(part)
+                        msg = await m.answer(part)
+                        _log_outgoing(m.chat.id, msg, part)
         return
 
     if text.strip().lower().startswith(INDEX_CMD):
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            await m.answer("Indexing documents, please wait...")
+            msg0 = await m.answer("Indexing documents, please wait...")
+            _log_outgoing(m.chat.id, msg0, "Indexing documents, please wait...")
 
             async def sender(msg):
-                await m.answer(msg)
+                r = await m.answer(msg)
+                _log_outgoing(m.chat.id, r, msg)
 
             await vector_store.vectorize_all_files(force=True, on_message=sender)
-            await m.answer("Indexing complete.")
+            msg1 = await m.answer("Indexing complete.")
+            _log_outgoing(m.chat.id, msg1, "Indexing complete.")
         return
 
     if text.strip().lower() == VOICE_ON_CMD:
         VOICE_ENABLED[m.chat.id] = True
         save_voice_state(VOICE_ENABLED)
-        await m.answer("Voice responses enabled")
+        msg = await m.answer("Voice responses enabled")
+        _log_outgoing(m.chat.id, msg, "Voice responses enabled")
         return
     if text.strip().lower() == VOICE_OFF_CMD:
         VOICE_ENABLED[m.chat.id] = False
         save_voice_state(VOICE_ENABLED)
-        await m.answer("Voice responses disabled")
+        msg = await m.answer("Voice responses disabled")
+        _log_outgoing(m.chat.id, msg, "Voice responses disabled")
         return
 
     # Direct DeepSeek call
     if text.strip().lower().startswith(DEEPSEEK_CMD):
         if not DEEPSEEK_ENABLED:
-            await m.answer("DeepSeek integration is not configured")
+            msg = await m.answer("DeepSeek integration is not configured")
+            _log_outgoing(m.chat.id, msg, "DeepSeek integration is not configured")
             return
         query = text.strip()[len(DEEPSEEK_CMD):].lstrip()
         if not query:
@@ -323,7 +407,8 @@ async def all_messages(m: types.Message):
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
             resp = await engine.deepseek_reply(query)
             for chunk in split_message(resp):
-                await m.answer(chunk)
+                msg = await m.answer(chunk)
+                _log_outgoing(m.chat.id, msg, chunk)
         return
 
     # Простая проверка упоминания бота в группах
@@ -371,8 +456,8 @@ async def all_messages(m: types.Message):
         thread_key = str(m.chat.id)  # shared history for the whole group
 
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-        # Генерируем ответ через Assistants API
-        prompt = await append_link_snippets(text)
+        prompt_base = await append_link_snippets(text)
+        prompt = await build_prompt(m, prompt_base)
         resp = await engine.ask(thread_key, prompt, is_group=is_group)
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 

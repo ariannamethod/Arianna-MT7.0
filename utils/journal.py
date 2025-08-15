@@ -39,3 +39,21 @@ def log_event(event: Dict) -> None:
         logger.info(json.dumps(safe_event, ensure_ascii=False))
     except Exception as e:
         logger.error("Failed to write journal", exc_info=e)
+
+
+def search_journal(query: str, limit: int = 20) -> list[str]:
+    """Search the journal log for lines containing the query."""
+    if not os.path.exists(_JOURNAL_PATH):
+        return []
+    query_l = query.lower()
+    matches: list[str] = []
+    try:
+        with open(_JOURNAL_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if query_l in line.lower():
+                    matches.append(line.strip())
+                    if len(matches) >= limit:
+                        break
+    except Exception:
+        return []
+    return matches
