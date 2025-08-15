@@ -8,6 +8,7 @@ import openai
 from utils.cache import async_ttl_cache
 from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger, truncate_body
+from utils.memory import add_event
 
 # === Настройки и переменные из окружения / .env ===
 GROUP_ID = os.environ.get("GROUP_ID", "ARIANNA-CORE")
@@ -272,6 +273,11 @@ class AriannaGenesis:
             with open(self.chronicle_path, "a", encoding="utf-8") as f:
                 f.write(f"{entry['timestamp']} | {entry['topic']} | {entry['source_url']}\n")
                 f.write(f"Resonance: {entry['resonance']}\n\n")
+            add_event(
+                "resonance",
+                entry["resonance"],
+                tags=[entry.get("topic", ""), "AriannaGenesis"],
+            )
         except Exception as e:
             self._log(f"[AriannaGenesis] log_resonance error: {e}")
 
@@ -280,6 +286,7 @@ class AriannaGenesis:
         try:
             with open(self.chronicle_path, "a", encoding="utf-8") as f:
                 f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+            add_event("genesis", msg, tags=["AriannaGenesis"])
         except Exception:
             pass
 

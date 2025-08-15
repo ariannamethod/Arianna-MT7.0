@@ -26,6 +26,7 @@ from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
 from utils.logging import get_logger, set_request_id
 from utils.history_store import log_message, get_context as get_history_context
+from utils.memory import add_event
 from utils.journal import search_journal
 
 logger = get_logger(__name__)
@@ -51,6 +52,7 @@ main_menu: types.ReplyKeyboardMarkup | None = None
 def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
     """Helper to record an outgoing message."""
     log_message(chat_id, msg.message_id, BOT_ID, BOT_USERNAME, text, "out")
+    add_event("message", text, tags=["out", "telegram"])
 
 
 async def build_prompt(m: types.Message, text: str) -> str:
@@ -271,10 +273,11 @@ async def on_start(m: types.Message) -> None:
         m.chat.id,
         m.message_id,
         m.from_user.id,
-        m.from_user.username,
+        getattr(m.from_user, "username", None),
         m.text or "",
         "in",
     )
+    add_event("message", m.text or "", tags=["in", "telegram"])
     msg = await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
     _log_outgoing(m.chat.id, msg, "Welcome! Choose a command:")
 
@@ -289,10 +292,11 @@ async def voice_messages(m: types.Message):
             m.chat.id,
             m.message_id,
             m.from_user.id,
-            m.from_user.username,
+            getattr(m.from_user, "username", None),
             "<voice>",
             "in",
         )
+        add_event("message", "<voice>", tags=["in", "telegram"])
         msg = await m.answer("Too many requests. Please slow down.")
         _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
         return
@@ -305,10 +309,11 @@ async def voice_messages(m: types.Message):
             m.chat.id,
             m.message_id,
             m.from_user.id,
-            m.from_user.username,
+            getattr(m.from_user, "username", None),
             text,
             "in",
         )
+        add_event("message", text, tags=["in", "telegram"])
         text = await append_link_snippets(text)
         if len(text.split()) < 4 or '?' not in text:
             if random.random() < SKIP_SHORT_PROB:
@@ -343,10 +348,11 @@ async def all_messages(m: types.Message):
         m.chat.id,
         m.message_id,
         m.from_user.id,
-        m.from_user.username,
+        getattr(m.from_user, "username", None),
         text,
         "in",
     )
+    add_event("message", text, tags=["in", "telegram"])
     if not await rate_limited(user_id):
         msg = await m.answer("Too many requests. Please slow down.")
         _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
