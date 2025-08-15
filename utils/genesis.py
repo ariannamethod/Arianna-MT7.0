@@ -137,20 +137,29 @@ class AriannaGenesis:
         to_sleep = max(1, (next_day - now).total_seconds())
         await asyncio.sleep(to_sleep)
 
+    async def _search_and_fetch(self, topic: str):
+        text, url = await self._web_search_openai(topic)
+        resonance = self._generate_impression(text, topic)
+        return text, url, resonance
+
     async def impressionist_search_resonance(self):
         """
         По каждому топику делает поиск, берёт рандомную статью, оставляет импрессионистский резонанс.
         """
         self._impressions_today = []
-        for topic in SEARCH_TOPICS:
-            text, url = await self._web_search_openai(topic)
-            resonance = self._generate_impression(text, topic)
+        tasks = [self._search_and_fetch(topic) for topic in SEARCH_TOPICS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for topic, result in zip(SEARCH_TOPICS, results):
+            if isinstance(result, Exception):
+                self._log(f"[AriannaGenesis] _search_and_fetch error for '{topic}': {result}")
+                continue
+            text, url, resonance = result
             entry = {
                 "topic": topic,
                 "source_url": url,
                 "text": text,
                 "resonance": resonance,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.datetime.now().isoformat(),
             }
             self._log_resonance(entry)
             self._impressions_today.append({'topic': topic, 'resonance': resonance, 'text': text, 'url': url})
