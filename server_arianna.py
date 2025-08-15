@@ -10,6 +10,7 @@ import openai
 from pydub import AudioSegment
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils.chat_action import ChatActionSender
+from aiogram.filters import CommandStart
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
@@ -40,6 +41,38 @@ INDEX_CMD = "/index"
 VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
+main_menu: types.ReplyKeyboardMarkup | None = None
+
+
+async def on_startup() -> None:
+    """Initialize bot commands and reply keyboard."""
+    global main_menu
+    main_menu = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                types.KeyboardButton(text=DEEPSEEK_CMD),
+                types.KeyboardButton(text=SEARCH_CMD),
+            ],
+            [types.KeyboardButton(text=INDEX_CMD)],
+            [
+                types.KeyboardButton(text=VOICE_ON_CMD),
+                types.KeyboardButton(text=VOICE_OFF_CMD),
+            ],
+        ],
+        resize_keyboard=True,
+    )
+
+    commands = [
+        types.BotCommand(command=DEEPSEEK_CMD[1:], description="DeepSeek query"),
+        types.BotCommand(command=SEARCH_CMD[1:], description="Search files"),
+        types.BotCommand(command=INDEX_CMD[1:], description="Reindex files"),
+        types.BotCommand(command=VOICE_ON_CMD[1:], description="Enable voice"),
+        types.BotCommand(command=VOICE_OFF_CMD[1:], description="Disable voice"),
+    ]
+    await bot.set_my_commands(commands)
+
+
+dp.startup.register(on_startup)
 
 # --- Redis-backed counters and rate limiting ---
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
@@ -194,6 +227,11 @@ async def healthz(request):
 
 async def status(request):
     return web.Response(text="running")
+
+
+@dp.message(CommandStart())
+async def on_start(m: types.Message) -> None:
+    await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
 
 
 @dp.message(lambda m: m.voice)
