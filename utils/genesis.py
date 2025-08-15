@@ -5,7 +5,7 @@ import httpx
 import os
 import openai
 
-from utils.logging import get_logger
+from utils.logging import get_logger, truncate_body
 
 # === Настройки и переменные из окружения / .env ===
 GROUP_ID = os.environ.get("GROUP_ID", "ARIANNA-CORE")
@@ -280,11 +280,20 @@ class AriannaGenesis:
         payload = {"chat_id": chat_id, "text": text}
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(url, data=payload)
+                resp = await client.post(url, data=payload)
+                if resp.is_error:
+                    self._log(
+                        f"[AriannaGenesis] send_message http_error url={url} params={payload} "
+                        f"status={resp.status_code} body={truncate_body(resp.text)}"
+                    )
         except httpx.TimeoutException:
-            self._log("[AriannaGenesis] send_message timeout")
+            self._log(
+                f"[AriannaGenesis] send_message timeout url={url} params={payload}"
+            )
         except Exception as e:
-            self._log(f"[AriannaGenesis] send_message error: {e}")
+            self._log(
+                f"[AriannaGenesis] send_message error: {e} url={url} params={payload}"
+            )
 
     async def _send_to_group(self, text):
         await self._async_send(self.group_id, text)

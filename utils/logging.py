@@ -18,6 +18,18 @@ _request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _EMAIL_RE = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
 _DIGIT_RE = re.compile(r"\d")
 
+# Maximum number of characters from HTTP response bodies to keep in logs
+MAX_BODY_LOG = 500
+
+
+def truncate_body(body: str | None, limit: int = MAX_BODY_LOG) -> str:
+    """Return body truncated to *limit* characters for safe logging."""
+    if body is None:
+        return ""
+    if len(body) <= limit:
+        return body
+    return body[:limit] + "...[truncated]"
+
 def _mask_value(value: str) -> str:
     value = _EMAIL_RE.sub("[EMAIL]", value)
     value = _DIGIT_RE.sub("X", value)
