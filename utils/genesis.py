@@ -5,6 +5,8 @@ import httpx
 import os
 import openai
 
+from utils.cache import async_ttl_cache
+from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger, truncate_body
 
 # === Настройки и переменные из окружения / .env ===
@@ -224,6 +226,7 @@ class AriannaGenesis:
             return short + ("..." if len(lines[0]) > 120 else "")
         return "[empty]"
 
+    @async_ttl_cache(ttl=CACHE_TTL)
     async def _web_search_openai(self, topic: str):
         """Поиск статьи через OpenAI web_search tool.
 
@@ -240,7 +243,7 @@ class AriannaGenesis:
                 model="gpt-4.1-mini",
                 input=prompt,
                 tools=[{"type": "web_search"}],
-                timeout=20,
+                timeout=HTTP_TIMEOUT,
             )
             data = resp.model_dump()
             for item in data.get("output", []):
@@ -288,7 +291,7 @@ class AriannaGenesis:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
                 resp = await client.post(url, data=payload)
                 if resp.is_error:
                     self._log(

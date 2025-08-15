@@ -18,6 +18,7 @@ from utils.arianna_engine import AriannaEngine
 from utils.split_message import split_message
 from utils.vector_store import VectorStore
 from utils.text_helpers import extract_text_from_url, _extract_links
+from utils.config import HTTP_TIMEOUT
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
@@ -153,7 +154,7 @@ async def append_link_snippets(text: str) -> str:
     if not urls:
         return text
     parts = [text]
-    tasks = [asyncio.wait_for(extract_text_from_url(url), timeout=10) for url in urls]
+    tasks = [asyncio.wait_for(extract_text_from_url(url), timeout=HTTP_TIMEOUT) for url in urls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for url, result in zip(urls, results):
         if isinstance(result, asyncio.TimeoutError):

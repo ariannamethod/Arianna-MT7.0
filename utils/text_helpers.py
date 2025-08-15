@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
+from utils.cache import async_ttl_cache
+from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger
 
 ALLOWED_DOMAINS = {d for d in os.getenv("ALLOWED_DOMAINS", "").split(",") if d}
@@ -57,6 +59,7 @@ def _extract_links(text: str, allowed_domains: set[str] | None = None, keywords:
             seen.add(link)
     return valid
 
+@async_ttl_cache(ttl=CACHE_TTL)
 async def extract_text_from_url(url):
     """Fetches a web page asynchronously and returns visible text."""
     try:
@@ -66,7 +69,8 @@ async def extract_text_from_url(url):
         headers = {"User-Agent": "Mozilla/5.0 (Arianna Agent)"}
         session = await _get_session()
         try:
-            async with session.get(url, timeout=10, headers=headers) as resp:
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
+            async with session.get(url, timeout=timeout, headers=headers) as resp:
                 resp.raise_for_status()
                 ctype = resp.headers.get("Content-Type", "")
                 if not any(allowed in ctype for allowed in ALLOWED_CONTENT_TYPES):

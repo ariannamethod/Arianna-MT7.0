@@ -10,6 +10,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback when structlog is mis
     structlog = None  # type: ignore[assignment]
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = os.getenv(
+    "LOG_FORMAT", "%(asctime)s %(levelname)s %(name)s %(message)s"
+)
 
 _request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "request_id", default=None
@@ -52,7 +55,9 @@ def set_request_id(request_id: str | None) -> None:
     _request_id.set(request_id)
 
 def configure_logging() -> None:
-    logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(message)s")
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO), format=LOG_FORMAT
+    )
     if structlog:
         structlog.configure(
             processors=[

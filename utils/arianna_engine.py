@@ -8,6 +8,7 @@ from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
 from utils.logging import get_logger
+from utils.config import HTTP_TIMEOUT
 
 class AriannaEngine:
     """
@@ -24,8 +25,8 @@ class AriannaEngine:
             "Content-Type": "application/json",
             "OpenAI-Beta": "assistants=v2"
         }
-        # Allow customization of request timeouts; None disables timeouts
-        self.request_timeout = None
+        # Allow customization of request timeouts
+        self.request_timeout = HTTP_TIMEOUT
         self.assistant_id = None
         self.threads      = load_threads()  # user_id → thread_id
 

@@ -5,21 +5,22 @@ import os
 import re
 from typing import Dict
 
+from utils.logging import get_logger, LOG_FORMAT
+
 _JOURNAL_DIR = "data"
 _JOURNAL_PATH = os.path.join(_JOURNAL_DIR, "journal.log")
 _MAX_BYTES = 1_000_000
 
-logger = logging.getLogger("journal")
+logger = get_logger("journal")
 
 if not logger.handlers:
     os.makedirs(_JOURNAL_DIR, exist_ok=True)
     handler = RotatingFileHandler(
         _JOURNAL_PATH, maxBytes=_MAX_BYTES, backupCount=3, encoding="utf-8"
     )
-    formatter = logging.Formatter("%(asctime)s %(message)s")
+    formatter = logging.Formatter(LOG_FORMAT)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
 
 _EMAIL_RE = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
 _DIGIT_RE = re.compile(r"\d")
