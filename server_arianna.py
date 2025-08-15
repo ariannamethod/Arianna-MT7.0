@@ -9,7 +9,7 @@ import openai
 from pydub import AudioSegment
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils.chat_action import ChatActionSender
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
@@ -40,6 +40,7 @@ SEARCH_CMD = "/search"
 INDEX_CMD = "/index"
 VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
+MENU_CMD = "/menu"
 VOICE_ENABLED = load_voice_state()
 main_menu: types.ReplyKeyboardMarkup | None = None
 
@@ -68,6 +69,7 @@ async def on_startup() -> None:
         types.BotCommand(command=INDEX_CMD[1:], description="Reindex files"),
         types.BotCommand(command=VOICE_ON_CMD[1:], description="Enable voice"),
         types.BotCommand(command=VOICE_OFF_CMD[1:], description="Disable voice"),
+        types.BotCommand(command=MENU_CMD[1:], description="Show command menu"),
     ]
     await bot.set_my_commands(commands)
 
@@ -225,9 +227,19 @@ async def status(request):
     return web.Response(text="running")
 
 
+async def _send_main_menu(m: types.Message) -> None:
+    """Send the main command menu."""
+    await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
+
+
 @dp.message(CommandStart())
 async def on_start(m: types.Message) -> None:
-    await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
+    await _send_main_menu(m)
+
+
+@dp.message(Command("menu"))
+async def on_menu(m: types.Message) -> None:
+    await _send_main_menu(m)
 
 
 @dp.message(lambda m: m.voice)
