@@ -9,7 +9,7 @@ from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
-from utils.logging import get_logger
+from utils.logging import get_logger, truncate_body
 from utils.config import HTTP_TIMEOUT
 
 
