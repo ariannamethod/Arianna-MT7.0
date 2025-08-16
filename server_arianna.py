@@ -2,6 +2,7 @@ import os
 import asyncio
 import random
 import tempfile
+import json
 
 import redis.asyncio as redis
 import re
@@ -14,7 +15,8 @@ from aiogram.filters import CommandStart
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from utils.arianna_engine import AriannaEngine
+from utils.arianna_engine import AriannaEngine, web_search
+from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.split_message import split_message
 from utils.vector_store import VectorStore
 from utils.text_helpers import extract_text_from_url, _extract_links
@@ -38,8 +40,8 @@ BOT_ID        = 0   # will be set at startup
 bot    = Bot(token=BOT_TOKEN)
 dp     = Dispatcher(bot=bot)
 engine = AriannaEngine()
-openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-vector_store = VectorStore(openai_client=openai_client)
+openai_client = None
+vector_store = None
 DEEPSEEK_CMD = "/ds"
 SEARCH_CMD = "/search"
 INDEX_CMD = "/index"
@@ -47,6 +49,20 @@ VOICE_ON_CMD = "/voiceon"
 VOICE_OFF_CMD = "/voiceoff"
 VOICE_ENABLED = load_voice_state()
 main_menu: types.ReplyKeyboardMarkup | None = None
+
+
+def get_openai_client():
+    global openai_client
+    if openai_client is None:
+        openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return openai_client
+
+
+def get_vector_store():
+    global vector_store
+    if vector_store is None:
+        vector_store = VectorStore(openai_client=get_openai_client())
+    return vector_store
 
 
 def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
@@ -73,7 +89,7 @@ async def build_prompt(text: str, ctx: list[dict] | None = None) -> str:
         )
         parts.append("[History]\n" + formatted)
     try:
-        chunks = await vector_store.semantic_search(text)
+        chunks = await get_vector_store().semantic_search(text)
     except Exception:
         chunks = []
     if chunks:
@@ -179,12 +195,84 @@ async def append_link_snippets(text: str) -> str:
     return "\n".join(parts)
 
 
+async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
+    """Call OpenAI Responses API allowing tool calls for Genesis and web search."""
+    if os.getenv("OPENAI_API_KEY") == "key":
+        return await engine.ask(thread_key, prompt, is_group=is_group)
+    system_prompt = engine._load_system_prompt()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+    tools = [
+        genesis_tool_schema(),
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for additional information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string"}},
+                    "required": ["prompt"],
+                },
+            },
+        },
+    ]
+    client = get_openai_client()
+    resp = await client.responses.create(
+        model="gpt-4.1-mini",
+        input=messages,
+        tools=tools,
+    )
+    data = resp.model_dump()
+    while True:
+        tool_calls = []
+        for item in data.get("output", []):
+            for content in item.get("content", []):
+                if content.get("type") == "tool_call":
+                    tool_calls.append(content)
+        if not tool_calls:
+            break
+        outputs = []
+        for call in tool_calls:
+            name = call.get("function", {}).get("name")
+            raw_args = call.get("function", {}).get("arguments") or {}
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args)
+                except Exception:
+                    args = {}
+            else:
+                args = raw_args
+            if name == "genesis_emit":
+                output = await handle_genesis_call([call])
+            elif name == "web_search":
+                query = args.get("prompt", "")
+                output = await web_search(query)
+            else:
+                output = f"Unknown tool {name}"
+            outputs.append({"tool_call_id": call["id"], "output": output})
+        resp = await client.responses.create(
+            response_id=resp.id,
+            tool_outputs=outputs,
+        )
+        data = resp.model_dump()
+    texts = []
+    for item in data.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") == "output_text":
+                texts.append(content.get("text", ""))
+    return "\n".join(texts).strip()
+
+
 async def transcribe_voice(file_path: str) -> str:
     """Transcribe an audio file using OpenAI Whisper."""
     f = await asyncio.to_thread(open, file_path, "rb")
     try:
         try:
-            resp = await openai_client.audio.transcriptions.create(
+            client = get_openai_client()
+            resp = await client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
             )
@@ -204,7 +292,8 @@ async def synthesize_voice(text: str) -> str:
     ogg_fd.close()
     try:
         try:
-            resp = await openai_client.audio.speech.with_streaming_response.create(
+            client = get_openai_client()
+            resp = await client.audio.speech.with_streaming_response.create(
                 model="tts-1",
                 voice="alloy",
                 input=text,
@@ -335,7 +424,7 @@ async def voice_messages(m: types.Message):
                 return
         prompt = await build_prompt(m, text)
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            resp = await engine.ask(thread_key, prompt, is_group=is_group)
+            resp = await assistant_reply(prompt, thread_key, is_group)
             create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
     except Exception as e:
         logger.exception("Error processing voice message: %s", e)
@@ -373,7 +462,7 @@ async def all_messages(m: types.Message):
         if not query:
             return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            chunks = await vector_store.semantic_search(query)
+            chunks = await get_vector_store().semantic_search(query)
             if not chunks:
                 msg = await m.answer("No relevant documents found.")
                 _log_outgoing(m.chat.id, msg, "No relevant documents found.")
@@ -393,7 +482,7 @@ async def all_messages(m: types.Message):
                 r = await m.answer(msg)
                 _log_outgoing(m.chat.id, r, msg)
 
-            await vector_store.vectorize_all_files(force=True, on_message=sender)
+            await get_vector_store().vectorize_all_files(force=True, on_message=sender)
             msg1 = await m.answer("Indexing complete.")
             _log_outgoing(m.chat.id, msg1, "Indexing complete.")
         return
@@ -477,7 +566,7 @@ async def all_messages(m: types.Message):
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         prompt_base = await append_link_snippets(text)
         prompt = await build_prompt(prompt_base, ctx)
-        resp = await engine.ask(thread_key, prompt, is_group=is_group)
+        resp = await assistant_reply(prompt, thread_key, is_group)
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
 async def main():

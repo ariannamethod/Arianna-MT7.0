@@ -3,12 +3,26 @@ import asyncio
 import httpx
 import json
 
+from openai import AsyncOpenAI
+
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
 from utils.logging import get_logger
 from utils.config import HTTP_TIMEOUT
+
+
+async def web_search(prompt: str) -> str:
+    """Execute OpenAI web search tool and return raw JSON string."""
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    resp = await client.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+        tools=[{"type": "web_search"}],
+        timeout=HTTP_TIMEOUT,
+    )
+    return resp.model_dump_json()
 
 class AriannaEngine:
     """
