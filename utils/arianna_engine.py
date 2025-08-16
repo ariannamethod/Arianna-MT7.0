@@ -24,6 +24,32 @@ async def web_search(prompt: str) -> str:
     )
     return resp.model_dump_json()
 
+
+async def handle_tool_call(tool_calls):
+    """Dispatch OpenAI tool calls and return their textual output."""
+    call = tool_calls[0]
+    ttype = call.get("type")
+    # Built-in tools may use a top-level type, custom functions use "function"
+    if ttype == "function":
+        name = call.get("function", {}).get("name")
+        raw_args = call.get("function", {}).get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args)
+            except Exception:
+                args = {}
+        else:
+            args = raw_args
+        if name == "genesis_emit":
+            return await handle_genesis_call(tool_calls)
+        if name == "web_search":
+            query = args.get("prompt", "")
+            return await web_search(query)
+    elif ttype == "web_search":
+        query = call.get("web_search", {}).get("query", "")
+        return await web_search(query)
+    return "Unsupported tool call"
+
 class AriannaEngine:
     """
     Обёртка Assistants API для Арианны:
@@ -55,7 +81,7 @@ class AriannaEngine:
             "name": "Arianna-Core-Assistant",
             "instructions": system_prompt,
             "model": "gpt-4.1",  # мощное ядро по твоему желанию
-            "tools": [schema],
+            "tools": [schema, {"type": "web_search"}],
             "tool_resources": {},
         }
 
@@ -162,7 +188,7 @@ class AriannaEngine:
                         tool_calls = event.get("data", {}).get("required_action", {}) \
                             .get("submit_tool_outputs", {}).get("tool_calls", [])
                         if tool_calls:
-                            output = await handle_genesis_call(tool_calls)
+                            output = await handle_tool_call(tool_calls)
                             tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
                             payload = {"tool_outputs": [{
                                 "tool_call_id": tool_calls[0]["id"],
@@ -246,7 +272,7 @@ class AriannaEngine:
                 tool_calls = run_json.get("required_action", {}) \
                     .get("submit_tool_outputs", {}).get("tool_calls", [])
                 if tool_calls:
-                    output = await handle_genesis_call(tool_calls)
+                    output = await handle_tool_call(tool_calls)
                     tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
                     payload = {"tool_outputs": [{
                         "tool_call_id": tool_calls[0]["id"],
@@ -484,11 +510,27 @@ class AriannaEngine:
                 )
                 raise
             msg = final.json()["data"][0]
-            # Если ассистент вызвал функцию GENESIS:
             if msg.get("tool_calls"):
-                answer = await handle_genesis_call(msg["tool_calls"])
+                answer = await handle_tool_call(msg["tool_calls"])
             else:
-                answer = msg["content"][0]["text"]["value"]
+                parts = []
+                for item in msg.get("content", []):
+                    if item.get("type") == "text":
+                        parts.append(item.get("text", {}).get("value", ""))
+                    elif item.get("type") == "tool_result":
+                        name = item.get("name") or item.get("tool_name")
+                        if name == "web_search":
+                            fragments = [
+                                c.get("text", "")
+                                for c in item.get("content", [])
+                                if c.get("type") == "text"
+                            ]
+                            url = item.get("url")
+                            if url:
+                                fragments.append(f"Source: {url}")
+                            if fragments:
+                                parts.append("\n".join(fragments))
+                answer = "\n".join(p for p in parts if p)
 
             log_event({
                 "thread_key": thread_key,
