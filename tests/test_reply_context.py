@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 
+from datetime import datetime, timedelta
 from utils.history_store import log_message
 
 
@@ -9,6 +10,8 @@ def test_reply_context(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "key")
     hist_path = tmp_path / "history.db"
     monkeypatch.setenv("HISTORY_DB_PATH", str(hist_path))
+    mem_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(mem_path))
 
     sa = importlib.import_module("server_arianna")
     monkeypatch.setattr(sa, "re", __import__("re"), raising=False)
@@ -46,6 +49,7 @@ def test_reply_context(monkeypatch, tmp_path):
 
     async def fake_search(query):
         return ["VS-hit"]
+    sa.get_vector_store()
     monkeypatch.setattr(sa.vector_store, "semantic_search", fake_search, raising=False)
 
     def fake_journal(query):
@@ -62,8 +66,10 @@ def test_reply_context(monkeypatch, tmp_path):
     log_message(chat_id, 8, 42, "user", "old question", "in")
     log_message(chat_id, 9, 1, "arianna", "old answer", "out")
 
+    now = datetime.utcnow()
     class Reply:
         message_id = 9
+        date = now - timedelta(minutes=1)
         class From:
             id = 1
         from_user = From()
@@ -77,6 +83,7 @@ def test_reply_context(monkeypatch, tmp_path):
         from_user = FromUser()
         text = "follow up?"
         message_id = 20
+        date = now
         entities = None
         reply_to_message = Reply()
         responses = []
@@ -95,3 +102,4 @@ def test_reply_context(monkeypatch, tmp_path):
     assert "old answer" in prompt
     assert "VS-hit" in prompt
     assert "J-hit" in prompt
+    assert "follow up?" in prompt  # memory event

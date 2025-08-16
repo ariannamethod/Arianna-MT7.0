@@ -1,7 +1,8 @@
 import os
 import sqlite3
 import threading
-from typing import List, Dict
+from datetime import datetime
+from typing import List, Dict, Optional
 
 HISTORY_DB_PATH = os.getenv("HISTORY_DB_PATH", "data/history.db")
 
@@ -44,17 +45,68 @@ def log_message(
             (chat_id, message_id, user_id, username, direction, text),
         )
 
-def get_context(chat_id: int, message_id: int, window: int = 10) -> List[Dict]:
-    """Return ~window messages before/after given message_id."""
+def get_context(
+    chat_id: int,
+    message_id: int,
+    window: int = 10,
+    *,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> List[Dict]:
+    """Return exactly ``window`` messages before and after ``message_id``.
+
+    Parameters
+    ----------
+    chat_id: int
+        Telegram chat identifier.
+    message_id: int
+        Central message to fetch context around.
+    window: int
+        Number of messages to retrieve on each side.
+    start: datetime | None
+        Optional lower time bound for returned messages.
+    end: datetime | None
+        Optional upper time bound for returned messages.
+
+    Selection is based on message timestamp rather than IDs to avoid gaps
+    caused by missing or sparse ``message_id`` values.
+    """
     with _lock:
         cur = _conn.execute(
-            """
-            SELECT message_id, direction, user_id, username, text
-            FROM messages
-            WHERE chat_id = ? AND message_id BETWEEN ? AND ?
-            ORDER BY message_id
-            """,
-            (chat_id, message_id - window, message_id + window),
+            "SELECT message_id, direction, user_id, username, text, ts "
+            "FROM messages WHERE chat_id = ? AND message_id = ?",
+            (chat_id, message_id),
         )
-        rows = cur.fetchall()
+        center = cur.fetchone()
+        if not center:
+            return []
+        ts: datetime = center["ts"]
+
+        before_query = (
+            "SELECT message_id, direction, user_id, username, text "
+            "FROM messages WHERE chat_id = ? AND ts < ?"
+        )
+        before_params: List[object] = [chat_id, ts]
+        if start:
+            before_query += " AND ts >= ?"
+            before_params.append(start)
+        before_query += " ORDER BY ts DESC LIMIT ?"
+        before_params.append(window)
+        before = _conn.execute(before_query, before_params).fetchall()
+
+        after_query = (
+            "SELECT message_id, direction, user_id, username, text "
+            "FROM messages WHERE chat_id = ? AND ts > ?"
+        )
+        after_params: List[object] = [chat_id, ts]
+        if end:
+            after_query += " AND ts < ?"
+            after_params.append(end)
+        after_query += " ORDER BY ts ASC LIMIT ?"
+        after_params.append(window)
+        after = _conn.execute(after_query, after_params).fetchall()
+
+    rows = list(reversed(before))
+    rows.append(center)
+    rows.extend(after)
     return [dict(row) for row in rows]
