@@ -3,6 +3,7 @@ import asyncio
 import random
 import tempfile
 import json
+from datetime import timedelta
 
 import redis.asyncio as redis
 import re
@@ -28,7 +29,7 @@ from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
 from utils.logging import get_logger, set_request_id
 from utils.history_store import log_message, get_context as get_history_context
-from utils.memory import add_event
+from utils.memory import add_event, query_events
 from utils.journal import search_journal
 
 logger = get_logger(__name__)
@@ -71,7 +72,11 @@ def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
     add_event("message", text, tags=["out", "telegram"])
 
 
-async def build_prompt(text: str, ctx: list[dict] | None = None) -> str:
+async def build_prompt(
+    text: str,
+    ctx: list[dict] | None = None,
+    events: list[dict] | None = None,
+) -> str:
     """Enrich the user message with history, vector store and journal context.
 
     Parameters
@@ -80,6 +85,8 @@ async def build_prompt(text: str, ctx: list[dict] | None = None) -> str:
         Base user text, possibly augmented with link snippets.
     ctx: list[dict] | None
         Optional history messages around a replied message.
+    events: list[dict] | None
+        Optional memory events related to the conversation.
     """
     parts = [text]
     if ctx:
@@ -97,6 +104,12 @@ async def build_prompt(text: str, ctx: list[dict] | None = None) -> str:
     journal_hits = search_journal(text)
     if journal_hits:
         parts.append("[journal.log]\n" + "\n".join(journal_hits))
+    if events:
+        formatted = "\n".join(
+            f"{e['ts']}: {e['content']}" if e.get('content') else str(e['ts'])
+            for e in events
+        )
+        parts.append("[Memory]\n" + formatted)
     return "\n\n".join(parts)
 
 
@@ -422,7 +435,7 @@ async def voice_messages(m: types.Message):
                     text[:100],
                 )
                 return
-        prompt = await build_prompt(m, text)
+        prompt = await build_prompt(text)
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
             resp = await assistant_reply(prompt, thread_key, is_group)
             create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
@@ -560,12 +573,17 @@ async def all_messages(m: types.Message):
     if is_group:
         thread_key = str(m.chat.id)  # shared history for the whole group
     ctx = None
+    events = None
     if m.reply_to_message:
-        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id)
+        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id, end=m.date)
+        delta = timedelta(minutes=5)
+        start = m.reply_to_message.date - delta
+        end = m.date + delta
+        events = query_events(tags=["telegram"], start=start, end=end)
 
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         prompt_base = await append_link_snippets(text)
-        prompt = await build_prompt(prompt_base, ctx)
+        prompt = await build_prompt(prompt_base, ctx, events)
         resp = await assistant_reply(prompt, thread_key, is_group)
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
