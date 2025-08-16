@@ -59,21 +59,19 @@ def genesis_tool_schema():
     """
     return {
         "type": "function",
-        "function": {
-            "name": "genesis_emit",
-            "description": "Запустить один такт AriannaGenesis — отдать импрессионистский отклик или ритуальный пост",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["impression", "opinion", "oleg_message"],
-                        "description": "Какой Genesis-такт выполнить"
-                    }
-                },
-                "required": ["mode"]
-            }
-        }
+        "name": "genesis_emit",
+        "description": "Запустить один такт AriannaGenesis — отдать импрессионистский отклик или ритуальный пост",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["impression", "opinion", "oleg_message"],
+                    "description": "Какой Genesis-такт выполнить",
+                }
+            },
+            "required": ["mode"],
+        },
     }
 
 async def handle_genesis_call(tool_calls):

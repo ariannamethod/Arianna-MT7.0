@@ -216,14 +216,12 @@ async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
         genesis_tool_schema(),
         {
             "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for additional information",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"prompt": {"type": "string"}},
-                    "required": ["prompt"],
-                },
+            "name": "web_search",
+            "description": "Search the web for additional information",
+            "parameters": {
+                "type": "object",
+                "properties": {"prompt": {"type": "string"}},
+                "required": ["prompt"],
             },
         },
     ]
@@ -237,6 +235,9 @@ async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
     while True:
         tool_calls = []
         for item in data.get("output", []):
+            if item.get("type") == "tool_call":
+                tool_calls.append(item)
+                continue
             for content in item.get("content", []):
                 if content.get("type") == "tool_call":
                     tool_calls.append(content)
@@ -244,8 +245,13 @@ async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
             break
         outputs = []
         for call in tool_calls:
-            name = call.get("function", {}).get("name")
-            raw_args = call.get("function", {}).get("arguments") or {}
+            name = call.get("name") or call.get("function", {}).get("name")
+            raw_args = (
+                call.get("arguments")
+                or call.get("input")
+                or call.get("function", {}).get("arguments")
+                or {}
+            )
             if isinstance(raw_args, str):
                 try:
                     args = json.loads(raw_args)
@@ -268,6 +274,9 @@ async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
         data = resp.model_dump()
     texts = []
     for item in data.get("output", []):
+        if item.get("type") == "output_text":
+            texts.append(item.get("text", ""))
+            continue
         for content in item.get("content", []):
             if content.get("type") == "output_text":
                 texts.append(content.get("text", ""))
