@@ -3,14 +3,20 @@ import datetime
 import json
 import math
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI
 from pinecone import Pinecone
+try:  # pragma: no cover - optional dependency
+    from scipy.stats import entropy as scipy_entropy  # type: ignore
+except Exception:  # pragma: no cover - no scipy installed
+    scipy_entropy = None  # type: ignore
 
 from utils.atomic_json import atomic_json_dump
 from utils.logging import get_logger
+from utils.memory import add_event
 from utils.vector_store import EMBED_DIM, safe_embed
 
 logger = get_logger(__name__)
@@ -77,13 +83,38 @@ class StateSnapshotter:
         except Exception:
             return ""
 
-    def collect_state(self) -> Dict[str, str]:
+    # ------------------------------------------------------------------
+    # Text analytics helpers
+    # ------------------------------------------------------------------
+    def _calc_metrics(self, text: str) -> Dict[str, float]:
+        tokens = [t for t in text.split() if t]
+        if len(tokens) < 2:
+            return {"entropy": 0.0, "perplexity": 0.0}
+        bigrams = list(zip(tokens[:-1], tokens[1:]))
+        counts = Counter(bigrams)
+        total = sum(counts.values())
+        probs = [c / total for c in counts.values()]
+        if scipy_entropy:
+            ent = float(scipy_entropy(probs))
+        else:
+            ent = float(-sum(p * math.log(p) for p in probs if p))
+        pp = float(math.exp(ent))
+        return {"entropy": ent, "perplexity": pp}
+
+    def collect_state(self) -> Dict[str, Dict[str, Any]]:
         memory = self._read_file(Path("data/journal.json"))
         logs = self._read_file(Path(self.chronicle_path))
         resources = "\n".join(
             line.strip() for line in logs.splitlines() if "http" in line
         )
-        return {"memory": memory, "logs": logs, "resources": resources}
+        result = {}
+        for name, text in {
+            "memory": memory,
+            "logs": logs,
+            "resources": resources,
+        }.items():
+            result[name] = {"text": text, **self._calc_metrics(text)}
+        return result
 
     # ------------------------------------------------------------------
     # Local store helpers
@@ -128,10 +159,18 @@ class StateSnapshotter:
         timestamp = datetime.datetime.now().isoformat()
         self._init_pinecone()
         local_data = self._load_local()
-        for block, text in state.items():
+        for block, data in state.items():
+            text = data.get("text", "")
+            ent = data.get("entropy", 0.0)
+            pp = data.get("perplexity", 0.0)
             emb = await self._embed_text(text)
             snapshot_id = f"{timestamp}:{block}"
-            meta = {"block": block, "timestamp": timestamp}
+            meta = {
+                "block": block,
+                "timestamp": timestamp,
+                "entropy": ent,
+                "perplexity": pp,
+            }
             if self._index is not None:
                 try:
                     await asyncio.to_thread(
@@ -150,13 +189,18 @@ class StateSnapshotter:
                     "Snapshot %s similarity to previous: %.3f", block, sim
                 )
             else:
+                sim = 0.0
                 logger.info("Snapshot %s recorded", block)
+            summary = f"{block} similarity={sim:.2f} perplexity={pp:.2f}"
+            add_event("snapshot_summary", summary, tags=["snapshot"])
             local_data.append(
                 {
                     "id": snapshot_id,
                     "block": block,
                     "timestamp": timestamp,
                     "embedding": emb,
+                    "entropy": ent,
+                    "perplexity": pp,
                 }
             )
         self._save_local(local_data)
