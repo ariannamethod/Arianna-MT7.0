@@ -36,6 +36,8 @@ def test_opinions_group_post(monkeypatch, tmp_path):
     ]
 
     monkeypatch.setattr(AriannaGenesis, "_summarize_text", lambda self, text: "summary")
+    import utils.genesis_service as gs
+    monkeypatch.setattr(gs, "_EVENT_DB_PATH", str(tmp_path / "events.db"), raising=False)
     sent = {}
 
     async def fake_send(self, text: str):

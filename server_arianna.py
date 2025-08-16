@@ -29,7 +29,7 @@ from utils.genesis_service import start_genesis_service, stop_genesis_service
 from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
 from utils.logging import get_logger, set_request_id
 from utils.history_store import log_message, get_context as get_history_context
-from utils.memory import add_event, query_events
+from utils.memory import add_event, query_events, semantic_query
 from utils.journal import search_journal
 
 logger = get_logger(__name__)
@@ -104,10 +104,13 @@ async def build_prompt(
     journal_hits = search_journal(text)
     if journal_hits:
         parts.append("[journal.log]\n" + "\n".join(journal_hits))
+    mem_events = semantic_query(text)
     if events:
+        mem_events.extend(events)
+    if mem_events:
         formatted = "\n".join(
             f"{e['ts']}: {e['content']}" if e.get('content') else str(e['ts'])
-            for e in events
+            for e in mem_events
         )
         parts.append("[Memory]\n" + formatted)
     return "\n\n".join(parts)

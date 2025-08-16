@@ -56,6 +56,10 @@ def test_reply_context(monkeypatch, tmp_path):
         return ["J-hit"]
     monkeypatch.setattr(sa, "search_journal", fake_journal, raising=False)
 
+    def fake_semantic(text):
+        return [{"ts": now, "content": "mem"}]
+    monkeypatch.setattr(sa, "semantic_query", fake_semantic, raising=False)
+
     captured = {}
     async def fake_ask(thread_key, prompt, is_group):
         captured["prompt"] = prompt
@@ -64,6 +68,8 @@ def test_reply_context(monkeypatch, tmp_path):
 
     chat_id = 10
     log_message(chat_id, 8, 42, "user", "old question", "in")
+    import time
+    time.sleep(1)
     log_message(chat_id, 9, 1, "arianna", "old answer", "out")
 
     now = datetime.utcnow()
@@ -102,4 +108,5 @@ def test_reply_context(monkeypatch, tmp_path):
     assert "old answer" in prompt
     assert "VS-hit" in prompt
     assert "J-hit" in prompt
-    assert "follow up?" in prompt  # memory event
+    assert "mem" in prompt
+    assert "follow up?" in prompt
