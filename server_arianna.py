@@ -55,17 +55,23 @@ def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
     add_event("message", text, tags=["out", "telegram"])
 
 
-async def build_prompt(m: types.Message, text: str) -> str:
-    """Enrich the user message with history, vector store and journal context."""
+async def build_prompt(text: str, ctx: list[dict] | None = None) -> str:
+    """Enrich the user message with history, vector store and journal context.
+
+    Parameters
+    ----------
+    text: str
+        Base user text, possibly augmented with link snippets.
+    ctx: list[dict] | None
+        Optional history messages around a replied message.
+    """
     parts = [text]
-    if m.reply_to_message:
-        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id)
-        if ctx:
-            formatted = "\n".join(
-                "User: " + c["text"] if c["direction"] == "in" else "Bot: " + c["text"]
-                for c in ctx
-            )
-            parts.append("[History]\n" + formatted)
+    if ctx:
+        formatted = "\n".join(
+            "User: " + c["text"] if c["direction"] == "in" else "Bot: " + c["text"]
+            for c in ctx
+        )
+        parts.append("[History]\n" + formatted)
     try:
         chunks = await vector_store.semantic_search(text)
     except Exception:
@@ -461,10 +467,13 @@ async def all_messages(m: types.Message):
     thread_key = user_id
     if is_group:
         thread_key = str(m.chat.id)  # shared history for the whole group
+    ctx = None
+    if m.reply_to_message:
+        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id)
 
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         prompt_base = await append_link_snippets(text)
-        prompt = await build_prompt(m, prompt_base)
+        prompt = await build_prompt(prompt_base, ctx)
         resp = await engine.ask(thread_key, prompt, is_group=is_group)
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
