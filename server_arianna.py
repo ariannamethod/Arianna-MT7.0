@@ -122,11 +122,6 @@ async def on_startup() -> None:
     main_menu = types.ReplyKeyboardMarkup(
         keyboard=[
             [
-                types.KeyboardButton(text=DEEPSEEK_CMD),
-                types.KeyboardButton(text=SEARCH_CMD),
-            ],
-            [types.KeyboardButton(text=INDEX_CMD)],
-            [
                 types.KeyboardButton(text=VOICE_ON_CMD),
                 types.KeyboardButton(text=VOICE_OFF_CMD),
             ],
@@ -135,9 +130,6 @@ async def on_startup() -> None:
     )
 
     commands = [
-        types.BotCommand(command=DEEPSEEK_CMD[1:], description="DeepSeek query"),
-        types.BotCommand(command=SEARCH_CMD[1:], description="Search files"),
-        types.BotCommand(command=INDEX_CMD[1:], description="Reindex files"),
         types.BotCommand(command=VOICE_ON_CMD[1:], description="Enable voice"),
         types.BotCommand(command=VOICE_OFF_CMD[1:], description="Disable voice"),
     ]
