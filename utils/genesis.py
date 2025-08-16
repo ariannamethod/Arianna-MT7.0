@@ -5,11 +5,13 @@ import httpx
 import os
 import time
 import hashlib
+import json
 
 from utils.cache import async_ttl_cache
 from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger, truncate_body
 from utils.memory import add_event
+from utils.genesis_service import register_event
 
 # === Настройки и переменные из окружения / .env ===
 GROUP_ID = os.environ.get("GROUP_ID", "ARIANNA-CORE")
@@ -154,6 +156,9 @@ class AriannaGenesis:
         """
         По каждому топику делает поиск, берёт рандомную статью, оставляет импрессионистский резонанс.
         """
+        ts = int(time.time())
+        if not register_event("impressionist_search_resonance", ts, str(ts)):
+            return
         self._impressions_today = []
         tasks = [self._search_and_fetch(topic) for topic in SEARCH_TOPICS]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -187,6 +192,9 @@ class AriannaGenesis:
             f"Summary: {summary}\n"
             f"Impressionistic resonance: {chosen['resonance']}"
         )
+        ts = int(time.time())
+        if not register_event("opinions_group_post", ts, message):
+            return
         await self._send_to_group(message)
 
     async def oleg_personal_message(self):
@@ -215,6 +223,9 @@ class AriannaGenesis:
             f"Сегодняшний фрагмент резонанса: {fragment}\n"
             f"{signoff}"
         )
+        ts = int(time.time())
+        if not register_event("oleg_personal_message", ts, message):
+            return
         await self._send_direct(self.oleg_id, message)
 
     # === Импрессионистские генераторы и хаос ===
