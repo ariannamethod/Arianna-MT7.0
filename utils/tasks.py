@@ -1,5 +1,6 @@
 import asyncio
 from typing import Coroutine, Any, Set
+from time import perf_counter
 
 from utils.logging import get_logger
 
@@ -29,11 +30,30 @@ def create_task(coro: Coroutine[Any, Any, Any], *, name: str | None = None, trac
     if track:
         _tracked.add(task)
 
+    start = perf_counter()
+
     def _done_callback(t: asyncio.Task) -> None:
+        duration = perf_counter() - start
         try:
             t.result()
+        except asyncio.CancelledError:
+            logger.info(
+                "Background task %s cancelled after %.2fs",
+                name or getattr(t, "get_name", lambda: None)(),
+                duration,
+            )
         except Exception:
-            logger.exception("Background task %s failed", name or getattr(t, 'get_name', lambda: None)())
+            logger.exception(
+                "Background task %s failed after %.2fs",
+                name or getattr(t, "get_name", lambda: None)(),
+                duration,
+            )
+        else:
+            logger.info(
+                "Background task %s finished in %.2fs",
+                name or getattr(t, "get_name", lambda: None)(),
+                duration,
+            )
         finally:
             if track:
                 _tracked.discard(t)

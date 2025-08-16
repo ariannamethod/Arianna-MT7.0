@@ -24,9 +24,9 @@ from utils.text_helpers import extract_text_from_url, _extract_links
 from utils.config import HTTP_TIMEOUT
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
-from utils.tasks import create_task
-from utils.genesis_service import start_genesis_service, stop_genesis_service
-from utils.snapshot_service import start_snapshot_service, stop_snapshot_service
+from utils.tasks import create_task, cancel_tracked
+from utils.genesis_service import run_genesis_service
+from utils.snapshot_service import run_snapshot_service
 from utils.logging import get_logger, set_request_id
 from utils.history_store import log_message, get_context as get_history_context
 from utils.memory import add_event, query_events
@@ -601,8 +601,8 @@ async def main():
         logger.exception("Assistant initialization failed")
         init_failed = True
 
-    start_genesis_service()
-    start_snapshot_service()
+    create_task(run_genesis_service(), name="genesis_service", track=True)
+    create_task(run_snapshot_service(), name="snapshot_service", track=True)
     try:
         app = web.Application()
         path = f"/webhook/{BOT_TOKEN}"
@@ -628,8 +628,7 @@ async def main():
         logger.info("Arianna webhook started", port=port)
         await asyncio.Event().wait()
     finally:
-        stop_genesis_service()
-        stop_snapshot_service()
+        await cancel_tracked()
 
 if __name__ == "__main__":
     asyncio.run(main())
