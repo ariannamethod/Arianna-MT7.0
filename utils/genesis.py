@@ -3,7 +3,6 @@ import random
 import datetime
 import httpx
 import os
-import openai
 import time
 import hashlib
 
@@ -243,16 +242,11 @@ class AriannaGenesis:
             self._log("[AriannaGenesis] OPENAI_API_KEY is not set")
             return "[web search unavailable]", ""
 
-        client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
         prompt = f"Find an article about {topic} and provide a short extract."
         try:
-            resp = await client.responses.create(
-                model="gpt-4.1-mini",
-                input=prompt,
-                tools=[{"type": "web_search"}],
-                timeout=HTTP_TIMEOUT,
-            )
-            data = resp.model_dump()
+            from utils.arianna_engine import web_search
+            raw = await web_search(prompt)
+            data = json.loads(raw)
             for item in data.get("output", []):
                 for content in item.get("content", []):
                     if content.get("type") == "tool_result" and content.get("name") == "web_search":
