@@ -280,7 +280,10 @@ async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
         for content in item.get("content", []):
             if content.get("type") == "output_text":
                 texts.append(content.get("text", ""))
-    return "\n".join(texts).strip()
+    text = "\n".join(texts).strip()
+    if not text:
+        text = await engine.ask(thread_key, prompt, is_group=is_group)
+    return text
 
 
 async def transcribe_voice(file_path: str) -> str:

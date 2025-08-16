@@ -10,8 +10,8 @@ def test_split_message_splits_long_text():
     assert parts[1] == "a" * 1000
 
 
-def test_split_message_empty_returns_placeholder():
-    assert split_message("", max_length=10) == ["Even emptiness can be divided."]
+def test_split_message_empty_returns_empty_list():
+    assert split_message("", max_length=10) == []
 
 
 def test_split_message_prefers_newline():
