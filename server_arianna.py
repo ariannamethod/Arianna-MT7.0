@@ -336,6 +336,10 @@ async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thr
     else:
         delay = random.uniform(PRIVATE_DELAY_MIN, PRIVATE_DELAY_MAX)
     await asyncio.sleep(delay)
+    if not resp.strip():
+        msg = await m.answer("I have nothing to say.")
+        _log_outgoing(m.chat.id, msg, "I have nothing to say.")
+        return
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         if VOICE_ENABLED.get(m.chat.id):
             voice_path = await synthesize_voice(resp)
@@ -360,6 +364,8 @@ async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
     async with ChatActionSender(bot=bot, chat_id=chat_id, action="typing"):
         follow_prompt = "Send a short follow-up message referencing our earlier conversation."
         resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
+        if not resp.strip():
+            return
         if VOICE_ENABLED.get(chat_id):
             voice_path = await synthesize_voice(resp)
             msg = await bot.send_voice(
@@ -528,9 +534,13 @@ async def all_messages(m: types.Message):
             return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
             resp = await engine.deepseek_reply(query)
-            for chunk in split_message(resp):
-                msg = await m.answer(chunk)
-                _log_outgoing(m.chat.id, msg, chunk)
+            if not resp.strip():
+                msg = await m.answer("I have nothing to say.")
+                _log_outgoing(m.chat.id, msg, "I have nothing to say.")
+            else:
+                for chunk in split_message(resp):
+                    msg = await m.answer(chunk)
+                    _log_outgoing(m.chat.id, msg, chunk)
         return
 
     # Простая проверка упоминания бота в группах
