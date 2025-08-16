@@ -12,8 +12,16 @@ def test_daily_snapshot_vector_comparison(monkeypatch, tmp_path):
     ss = StateSnapshotter(chronicle_path=str(log_file), local_store=str(local_store))
 
     states = [
-        {"memory": "m1", "logs": "l1", "resources": "r1"},
-        {"memory": "m2", "logs": "l2", "resources": "r2"},
+        {
+            "memory": {"text": "m1", "entropy": 0.0, "perplexity": 0.0},
+            "logs": {"text": "l1", "entropy": 0.0, "perplexity": 0.0},
+            "resources": {"text": "r1", "entropy": 0.0, "perplexity": 0.0},
+        },
+        {
+            "memory": {"text": "m2", "entropy": 0.0, "perplexity": 0.0},
+            "logs": {"text": "l2", "entropy": 0.0, "perplexity": 0.0},
+            "resources": {"text": "r2", "entropy": 0.0, "perplexity": 0.0},
+        },
     ]
     call = {"i": 0}
 
