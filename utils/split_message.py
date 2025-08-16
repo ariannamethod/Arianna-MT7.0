@@ -12,6 +12,4 @@ def split_message(text, max_length=4000):
         text = text[idx:].lstrip('\n')
     if text:
         result.append(text)
-    if not result:
-        return ["Even emptiness can be divided."]
     return result
