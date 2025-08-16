@@ -110,6 +110,8 @@ async def on_startup() -> None:
         types.BotCommand(command=VOICE_OFF_CMD[1:], description="Disable voice"),
     ]
     await bot.set_my_commands(commands)
+    # Enable native menu button; older clients will fall back to the reply keyboard.
+    await bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
 
 
 dp.startup.register(on_startup)
@@ -284,6 +286,7 @@ async def on_start(m: types.Message) -> None:
         "in",
     )
     add_event("message", m.text or "", tags=["in", "telegram"])
+    # Provide reply keyboard as a fallback for clients without MenuButton support.
     msg = await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
     _log_outgoing(m.chat.id, msg, "Welcome! Choose a command:")
 
