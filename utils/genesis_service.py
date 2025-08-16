@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
+import os
+import sqlite3
 import threading
 from typing import Optional
 
-from utils.genesis_tool import get_genesis_instance
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -13,9 +15,49 @@ _task: Optional[asyncio.Task] = None
 _start_lock = threading.Lock()
 _running = False
 
+_EVENT_DB_PATH = "data/genesis_events.db"
+
+
+def _get_conn() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(_EVENT_DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(_EVENT_DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            func TEXT PRIMARY KEY,
+            timestamp REAL,
+            payload_hash TEXT
+        )
+        """
+    )
+    return conn
+
+
+def register_event(func: str, timestamp: float, payload: str) -> bool:
+    """Register event execution and suppress duplicates.
+
+    Returns ``True`` if event is new, ``False`` if duplicate was detected.
+    """
+    payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "SELECT timestamp, payload_hash FROM events WHERE func = ?",
+            (func,),
+        )
+        row = cur.fetchone()
+        if row and (row[0] == timestamp or row[1] == payload_hash):
+            return False
+        conn.execute(
+            "INSERT OR REPLACE INTO events (func, timestamp, payload_hash) VALUES (?, ?, ?)",
+            (func, timestamp, payload_hash),
+        )
+    return True
+
 
 def _worker():
     global _loop, _task, _running
+    from utils.genesis_tool import get_genesis_instance
+
     inst = get_genesis_instance()
     loop = asyncio.new_event_loop()
     _loop = loop
@@ -37,11 +79,15 @@ def _worker():
 def start_genesis_service():
     """Start the Genesis scheduler in a background thread."""
     global _thread, _running
-    if _running:
-        return _thread
     if not _start_lock.acquire(blocking=False):
         return _thread
     try:
+        if _thread and _thread.is_alive():
+            return _thread
+        if _thread and not _thread.is_alive():
+            _thread.join()
+            _thread = None
+            _running = False
         if _running:
             return _thread
         _thread = threading.Thread(target=_worker, name="genesis-service", daemon=True)
