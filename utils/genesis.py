@@ -4,6 +4,8 @@ import datetime
 import httpx
 import os
 import openai
+import time
+import hashlib
 
 from utils.cache import async_ttl_cache
 from utils.config import HTTP_TIMEOUT, CACHE_TTL
@@ -19,6 +21,8 @@ CHRONICLE_PATH = os.environ.get("CHRONICLE_PATH", "./config/chronicle.log")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
+# Minimum seconds between identical payload dispatches
+DUPLICATE_WINDOW = 60
 # — Темы для поиска
 SEARCH_TOPICS = [
     "cognitive science",
@@ -85,6 +89,8 @@ class AriannaGenesis:
         self.chronicle_path = chronicle_path or "./chronicle.log"
         self._impressions_today = []
         self._date_last_run = None
+        self._last_payload_hash: str | None = None
+        self._last_payload_time: float = 0.0
 
     async def run(self, timeout: float | None = None):
         """
@@ -295,6 +301,17 @@ class AriannaGenesis:
             self._log("[AriannaGenesis] TELEGRAM_TOKEN is not set, cannot send message")
             return
 
+        payload_hash = hashlib.sha256(f"{chat_id}:{text}".encode()).hexdigest()
+        now = time.time()
+        if (
+            self._last_payload_hash == payload_hash
+            and now - self._last_payload_time < DUPLICATE_WINDOW
+        ):
+            self._log(
+                f"[AriannaGenesis] duplicate message suppressed hash={payload_hash}"
+            )
+            return
+
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
         try:
@@ -313,6 +330,9 @@ class AriannaGenesis:
             self._log(
                 f"[AriannaGenesis] send_message error: {e} url={url} params={payload}"
             )
+        finally:
+            self._last_payload_hash = payload_hash
+            self._last_payload_time = now
 
     async def _send_to_group(self, text):
         await self._async_send(self.group_id, text)
