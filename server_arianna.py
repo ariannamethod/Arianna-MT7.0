@@ -203,11 +203,30 @@ async def append_link_snippets(text: str) -> str:
     return "\n".join(parts)
 
 
-async def assistant_reply(prompt: str, thread_key: str, is_group: bool) -> str:
+async def assistant_reply(
+    prompt: str,
+    thread_key: str,
+    is_group: bool,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+    username: str | None = None,
+) -> str:
     """Call OpenAI Responses API allowing tool calls for Genesis and web search."""
     if os.getenv("OPENAI_API_KEY") == "key":
-        return await engine.ask(thread_key, prompt, is_group=is_group)
-    system_prompt = engine._load_system_prompt()
+        return await engine.ask(
+            thread_key,
+            prompt,
+            is_group=is_group,
+            chat_id=chat_id,
+            user_id=user_id,
+            username=username,
+        )
+    system_prompt = engine._load_system_prompt(
+        chat_id=chat_id,
+        is_group=is_group,
+        current_user_id=user_id,
+        username=username,
+    )
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
@@ -444,7 +463,14 @@ async def voice_messages(m: types.Message):
                 return
         prompt = await build_prompt(text)
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            resp = await assistant_reply(prompt, thread_key, is_group)
+            resp = await assistant_reply(
+                prompt,
+                thread_key,
+                is_group,
+                chat_id=m.chat.id,
+                user_id=m.from_user.id,
+                username=getattr(m.from_user, "username", None),
+            )
             create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
     except Exception as e:
         logger.exception("Error processing voice message: %s", e)
@@ -530,7 +556,14 @@ async def all_messages(m: types.Message):
         if not query:
             return
         async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            resp = await engine.deepseek_reply(query)
+            is_group_ds = getattr(m.chat, "type", "") in ("group", "supergroup")
+            resp = await engine.deepseek_reply(
+                query,
+                chat_id=m.chat.id,
+                is_group=is_group_ds,
+                user_id=m.from_user.id,
+                username=getattr(m.from_user, "username", None),
+            )
             for chunk in split_message(resp):
                 msg = await m.answer(chunk)
                 _log_outgoing(m.chat.id, msg, chunk)
@@ -591,7 +624,14 @@ async def all_messages(m: types.Message):
     async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
         prompt_base = await append_link_snippets(text)
         prompt = await build_prompt(prompt_base, ctx, events)
-        resp = await assistant_reply(prompt, thread_key, is_group)
+        resp = await assistant_reply(
+            prompt,
+            thread_key,
+            is_group,
+            chat_id=m.chat.id,
+            user_id=m.from_user.id,
+            username=getattr(m.from_user, "username", None),
+        )
         create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
 
 async def main():

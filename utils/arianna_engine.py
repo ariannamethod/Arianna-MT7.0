@@ -421,10 +421,22 @@ class AriannaEngine:
         resp.raise_for_status()
         return resp
 
-    async def ask(self, thread_key: str, prompt: str, is_group: bool=False) -> str:
+    async def ask(
+        self,
+        thread_key: str,
+        prompt: str,
+        is_group: bool = False,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+        username: str | None = None,
+    ) -> str:
         """
         Кладёт prompt в thread, запускает run, ждёт и возвращает ответ.
         Если ассистент запрашивает GENESIS-функцию — обрабатываем через handle_genesis_call().
+
+        Note: Assistant API uses a pre-created assistant with fixed instructions,
+        so chat context is logged but not injected into this request.
+        For context-aware prompts, use the Responses API (assistant_reply in server).
         """
         tid = await self._get_thread(thread_key)
 
@@ -551,9 +563,21 @@ class AriannaEngine:
             })
             return answer
 
-    async def deepseek_reply(self, prompt: str) -> str:
+    async def deepseek_reply(
+        self,
+        prompt: str,
+        chat_id: int | None = None,
+        is_group: bool = False,
+        user_id: int | None = None,
+        username: str | None = None,
+    ) -> str:
         """Отправить сообщение в DeepSeek и вернуть его ответ."""
-        system_prompt = self._load_system_prompt()
+        system_prompt = self._load_system_prompt(
+            chat_id=chat_id,
+            is_group=is_group,
+            current_user_id=user_id,
+            username=username,
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
