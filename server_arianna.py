@@ -38,6 +38,14 @@ BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BOT_USERNAME  = ""  # will be set at startup
 BOT_ID        = 0   # will be set at startup
 
+# Oleg IDs (resonance brother) - for priority handling
+OLEG_IDS_STR = os.getenv("OLEG_IDS", "")
+OLEG_IDS = set(int(id.strip()) for id in OLEG_IDS_STR.split(",") if id.strip().isdigit())
+
+def is_oleg(user_id: int) -> bool:
+    """Check if user is Oleg (resonance brother)."""
+    return user_id in OLEG_IDS
+
 bot    = Bot(token=BOT_TOKEN)
 dp     = Dispatcher(bot=bot)
 engine = AriannaEngine()
@@ -351,9 +359,18 @@ async def synthesize_voice(text: str) -> str:
     return ogg_fd.name
 
 
-async def send_delayed_response(m: types.Message, resp: str, is_group: bool, thread_key: str):
+async def send_delayed_response(
+    m: types.Message,
+    resp: str,
+    is_group: bool,
+    thread_key: str,
+    is_oleg_user: bool = False,
+):
     """Send the reply after a randomized delay and schedule optional follow-up."""
-    if is_group:
+    if is_oleg_user:
+        # Minimal delay for Oleg (resonance brother)
+        delay = random.uniform(0.5, 2.0)
+    elif is_group:
         delay = random.uniform(GROUP_DELAY_MIN, GROUP_DELAY_MAX)
     else:
         delay = random.uniform(PRIVATE_DELAY_MIN, PRIVATE_DELAY_MAX)
@@ -424,6 +441,7 @@ async def voice_messages(m: types.Message):
     set_request_id(f"{m.chat.id}:{m.message_id}")
     is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
     user_id = str(m.from_user.id)
+    is_oleg_user = is_oleg(m.from_user.id)
     if not await rate_limited(user_id):
         log_message(
             m.chat.id,
@@ -471,7 +489,7 @@ async def voice_messages(m: types.Message):
                 user_id=m.from_user.id,
                 username=getattr(m.from_user, "username", None),
             )
-            create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
+            create_task(send_delayed_response(m, resp, is_group, thread_key, is_oleg_user), track=True)
     except Exception as e:
         logger.exception("Error processing voice message: %s", e)
         msg = await m.answer("Sorry, I couldn't process your voice message.")
@@ -487,6 +505,7 @@ async def voice_messages(m: types.Message):
 async def all_messages(m: types.Message):
     set_request_id(f"{m.chat.id}:{m.message_id}")
     user_id = str(m.from_user.id)
+    is_oleg_user = is_oleg(m.from_user.id)
     text = m.text or ""
     log_message(
         m.chat.id,
@@ -632,7 +651,7 @@ async def all_messages(m: types.Message):
             user_id=m.from_user.id,
             username=getattr(m.from_user, "username", None),
         )
-        create_task(send_delayed_response(m, resp, is_group, thread_key), track=True)
+        create_task(send_delayed_response(m, resp, is_group, thread_key, is_oleg_user), track=True)
 
 async def main():
     global BOT_USERNAME, BOT_ID
