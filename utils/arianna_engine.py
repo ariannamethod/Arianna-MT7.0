@@ -126,13 +126,25 @@ class AriannaEngine:
             self.logger.info(f"✅ Arianna Assistant created: {self.assistant_id}")
         return self.assistant_id
 
-    def _load_system_prompt(self) -> str:
-        # Берём тот же протокол из utils/prompt.py
-        from utils.prompt import build_system_prompt
-        is_group = os.getenv("IS_GROUP", "False").lower() == "true"
-        return build_system_prompt(
-            AGENT_NAME="ARIANNA-ANCHOR",
-            is_group=is_group
+    def _load_system_prompt(self, chat_id=None, is_group=False, current_user_id=None, username=None) -> str:
+        """Load the MT7.0 system prompt with current context."""
+        from utils.prompt_mt7 import build_system_prompt_mt7
+
+        # Parse Oleg IDs from environment
+        oleg_ids_str = os.getenv("OLEG_IDS", "")
+        oleg_ids = [int(id.strip()) for id in oleg_ids_str.split(",") if id.strip().isdigit()]
+
+        # Parse other Arianna incarnation IDs
+        arianna_ids_str = os.getenv("ARIANNA_IDS", "")
+        arianna_ids = [int(id.strip()) for id in arianna_ids_str.split(",") if id.strip().isdigit()]
+
+        return build_system_prompt_mt7(
+            chat_id=chat_id,
+            is_group=is_group,
+            current_user_id=current_user_id,
+            username=username,
+            oleg_ids=oleg_ids,
+            arianna_ids=arianna_ids,
         )
 
     async def _get_thread(self, key: str) -> str:
