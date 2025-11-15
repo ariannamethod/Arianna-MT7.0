@@ -26,9 +26,22 @@ from utils.config import HTTP_TIMEOUT
 logger = get_logger(__name__)
 
 
-async def web_search(prompt: str) -> str:
-    """Execute OpenAI web search tool and return raw JSON string."""
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+async def web_search(prompt: str, client: AsyncOpenAI) -> str:
+    """
+    Execute OpenAI web search tool and return raw JSON string.
+
+    Parameters
+    ----------
+    prompt : str
+        Search query
+    client : AsyncOpenAI
+        OpenAI client to use (avoids creating new client each time)
+
+    Returns
+    -------
+    str
+        Raw JSON response from web search
+    """
     resp = await client.responses.create(
         model="gpt-4.1-mini",
         input=prompt,
@@ -38,8 +51,22 @@ async def web_search(prompt: str) -> str:
     return resp.model_dump_json()
 
 
-async def handle_tool_call(tool_calls):
-    """Dispatch OpenAI tool calls and return their textual output."""
+async def handle_tool_call(tool_calls, client: Optional[AsyncOpenAI] = None):
+    """
+    Dispatch OpenAI tool calls and return their textual output.
+
+    Parameters
+    ----------
+    tool_calls : list
+        Tool calls to handle
+    client : Optional[AsyncOpenAI]
+        OpenAI client for web_search (if None, creates one)
+
+    Returns
+    -------
+    str
+        Tool output
+    """
     call = tool_calls[0]
     ttype = call.get("type")
     # Built-in tools may use a top-level type, custom functions use "function"
@@ -57,10 +84,14 @@ async def handle_tool_call(tool_calls):
             return await handle_genesis_call(tool_calls)
         if name == "web_search":
             query = args.get("prompt", "")
-            return await web_search(query)
+            if client is None:
+                client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            return await web_search(query, client)
     elif ttype == "web_search":
         query = call.get("web_search", {}).get("query", "")
-        return await web_search(query)
+        if client is None:
+            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        return await web_search(query, client)
     return "Unsupported tool call"
 
 
@@ -240,7 +271,7 @@ class AriannaCoreEngine:
             # Extract response text
             # Handle tool calls if present
             if hasattr(response, 'tool_calls') and response.tool_calls:
-                tool_output = await handle_tool_call(response.tool_calls)
+                tool_output = await handle_tool_call(response.tool_calls, self.openai_client)
                 return tool_output
 
             # Extract text content
