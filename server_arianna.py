@@ -1,706 +1,113 @@
+"""
+Arianna Telegram Server - Entry Point
+
+This is the main entry point for the Telegram interface.
+All Telegram-specific logic has been moved to interfaces/telegram_bot.py.
+This file handles:
+- Webhook setup
+- Genesis and Snapshot services
+- Health check routes
+"""
+
 import os
 import asyncio
-import random
-import tempfile
-import json
-from datetime import timedelta
 
-import redis.asyncio as redis
-import re
-
-import openai
-from pydub import AudioSegment
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils.chat_action import ChatActionSender
-from aiogram.filters import CommandStart
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from utils.arianna_engine import AriannaEngine, web_search
-from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
-from utils.split_message import split_message
-from core.vector_store_sqlite import SQLiteVectorStore
-from utils.text_helpers import extract_text_from_url, _extract_links
-from utils.config import HTTP_TIMEOUT
-from utils.deepseek_search import DEEPSEEK_ENABLED
-from utils.voice_store import load_voice_state, save_voice_state
+from interfaces.telegram_bot import TelegramInterface
 from utils.tasks import create_task, cancel_tracked
 from utils.genesis_service import run_genesis_service
 from utils.snapshot_service import run_snapshot_service
-from utils.logging import get_logger, set_request_id
-from utils.history_store import log_message, get_context as get_history_context
-from utils.memory import add_event, query_events, semantic_query
-from utils.journal import search_journal
+from utils.logging import get_logger
+
 
 logger = get_logger(__name__)
 
-BOT_TOKEN     = os.getenv("TELEGRAM_TOKEN")
-BOT_USERNAME  = ""  # will be set at startup
-BOT_ID        = 0   # will be set at startup
 
-# Oleg IDs (resonance brother) - for priority handling
-OLEG_IDS_STR = os.getenv("OLEG_IDS", "")
-OLEG_IDS = set(int(id.strip()) for id in OLEG_IDS_STR.split(",") if id.strip().isdigit())
-
-def is_oleg(user_id: int) -> bool:
-    """Check if user is Oleg (resonance brother)."""
-    return user_id in OLEG_IDS
-
-bot    = Bot(token=BOT_TOKEN)
-dp     = Dispatcher(bot=bot)
-engine = AriannaEngine()
-openai_client = None
-vector_store = None
-DEEPSEEK_CMD = "/ds"
-SEARCH_CMD = "/search"
-INDEX_CMD = "/index"
-VOICE_ON_CMD = "/voiceon"
-VOICE_OFF_CMD = "/voiceoff"
-VOICE_ENABLED = load_voice_state()
-main_menu: types.ReplyKeyboardMarkup | None = None
-
-
-def get_openai_client():
-    global openai_client
-    if openai_client is None:
-        openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    return openai_client
-
-
-def get_vector_store():
-    global vector_store
-    if vector_store is None:
-        # SQLite vector store - local, fast, no Pinecone API dependency
-        db_path = os.getenv("VECTOR_DB_PATH", "data/vectors.db")
-        vector_store = SQLiteVectorStore(
-            db_path=db_path,
-            openai_client=get_openai_client()  # For API compatibility
-        )
-    return vector_store
-
-
-def _log_outgoing(chat_id: int, msg: types.Message, text: str) -> None:
-    """Helper to record an outgoing message."""
-    log_message(chat_id, msg.message_id, BOT_ID, BOT_USERNAME, text, "out")
-    add_event("message", text, tags=["out", "telegram"])
-
-
-async def build_prompt(
-    text: str,
-    ctx: list[dict] | None = None,
-    events: list[dict] | None = None,
-) -> str:
-    """Enrich the user message with history, vector store and journal context.
-
-    Parameters
-    ----------
-    text: str
-        Base user text, possibly augmented with link snippets.
-    ctx: list[dict] | None
-        Optional history messages around a replied message.
-    events: list[dict] | None
-        Optional memory events related to the conversation.
-    """
-    parts = [text]
-    if ctx:
-        formatted = "\n".join(
-            "User: " + c["text"] if c["direction"] == "in" else "Bot: " + c["text"]
-            for c in ctx
-        )
-        parts.append("[History]\n" + formatted)
-    try:
-        chunks = await get_vector_store().semantic_search(text)
-    except Exception:
-        chunks = []
-    if chunks:
-        parts.append("[VectorStore]\n" + "\n".join(chunks))
-    journal_hits = search_journal(text)
-    if journal_hits:
-        parts.append("[journal.log]\n" + "\n".join(journal_hits))
-    mem_events = semantic_query(text)
-    if events:
-        mem_events.extend(events)
-    if mem_events:
-        formatted = "\n".join(
-            f"{e['ts']}: {e['content']}" if e.get('content') else str(e['ts'])
-            for e in mem_events
-        )
-        parts.append("[Memory]\n" + formatted)
-    return "\n\n".join(parts)
-
-
-async def on_startup() -> None:
-    """Initialize bot commands and reply keyboard."""
-    global main_menu
-    main_menu = types.ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                types.KeyboardButton(text=VOICE_ON_CMD),
-                types.KeyboardButton(text=VOICE_OFF_CMD),
-            ],
-        ],
-        resize_keyboard=True,
-    )
-
-    commands = [
-        types.BotCommand(command=VOICE_ON_CMD[1:], description="Enable voice"),
-        types.BotCommand(command=VOICE_OFF_CMD[1:], description="Disable voice"),
-    ]
-    await bot.set_my_commands(commands)
-    # Enable native menu button; older clients will fall back to the reply keyboard.
-    await bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
-
-
-dp.startup.register(on_startup)
-
-# --- Redis-backed counters and rate limiting ---
-RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", 5))
-RATE_LIMIT_INTERVAL = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-_redis = redis.from_url(REDIS_URL, decode_responses=True)
-
-
-async def increment_counter(key: str, ttl: int) -> int:
-    """Atomically increment a counter and set/update its TTL."""
-    async with _redis.pipeline(transaction=True) as pipe:
-        pipe.incr(key)
-        pipe.expire(key, ttl)
-        count, _ = await pipe.execute()
-    return count
-
-async def rate_limited(user_id: str) -> bool:
-    """Return True if under limit; otherwise False."""
-    key = f"rl:{user_id}"
-    try:
-        count = await increment_counter(key, RATE_LIMIT_INTERVAL)
-    except Exception as e:
-        logger.exception("Rate limiter error for user %s: %s", user_id, e)
-        return True
-    if count > RATE_LIMIT_MAX:
-        logger.warning(
-            "Rate limit exceeded for user %s (%d > %d)",
-            user_id,
-            count,
-            RATE_LIMIT_MAX,
-        )
-    return count <= RATE_LIMIT_MAX
-
-# --- optional behavior tuning ---
-GROUP_DELAY_MIN   = int(os.getenv("GROUP_DELAY_MIN", 120))   # 2 minutes
-GROUP_DELAY_MAX   = int(os.getenv("GROUP_DELAY_MAX", 360))   # 6 minutes
-PRIVATE_DELAY_MIN = int(os.getenv("PRIVATE_DELAY_MIN", 10))  # 10 seconds
-PRIVATE_DELAY_MAX = int(os.getenv("PRIVATE_DELAY_MAX", 40))  # 40 seconds
-SKIP_SHORT_PROB   = float(os.getenv("SKIP_SHORT_PROB", 0))
-FOLLOWUP_PROB     = float(os.getenv("FOLLOWUP_PROB", 0.2))
-FOLLOWUP_DELAY_MIN = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))   # 15 minutes
-FOLLOWUP_DELAY_MAX = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))  # 2 hours
-
-async def append_link_snippets(text: str) -> str:
-    """Append snippet from any https:// link in the text."""
-    urls = _extract_links(text)[:3]
-    if not urls:
-        return text
-    parts = [text]
-    tasks = [asyncio.wait_for(extract_text_from_url(url), timeout=HTTP_TIMEOUT) for url in urls]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for url, result in zip(urls, results):
-        if isinstance(result, asyncio.TimeoutError):
-            logger.warning("Timeout fetching %s", url)
-            snippet = "[Timeout]"
-        elif isinstance(result, Exception):
-            logger.exception("Error loading page %s: %s", url, result)
-            snippet = f"[Error loading page: {result}]"
-        else:
-            snippet = result
-        parts.append(f"\n[Snippet from {url}]\n{snippet[:500]}")
-    return "\n".join(parts)
-
-
-async def assistant_reply(
-    prompt: str,
-    thread_key: str,
-    is_group: bool,
-    chat_id: int | None = None,
-    user_id: int | None = None,
-    username: str | None = None,
-) -> str:
-    """Call OpenAI Responses API allowing tool calls for Genesis and web search."""
-    if os.getenv("OPENAI_API_KEY") == "key":
-        return await engine.ask(
-            thread_key,
-            prompt,
-            is_group=is_group,
-            chat_id=chat_id,
-            user_id=user_id,
-            username=username,
-        )
-    system_prompt = engine._load_system_prompt(
-        chat_id=chat_id,
-        is_group=is_group,
-        current_user_id=user_id,
-        username=username,
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
-    tools = [
-        genesis_tool_schema(),
-        {
-            "type": "function",
-            "name": "web_search",
-            "description": "Search the web for additional information",
-            "parameters": {
-                "type": "object",
-                "properties": {"prompt": {"type": "string"}},
-                "required": ["prompt"],
-            },
-        },
-    ]
-    client = get_openai_client()
-    resp = await client.responses.create(
-        model="gpt-4.1-mini",
-        input=messages,
-        tools=tools,
-    )
-    data = resp.model_dump()
-    while True:
-        tool_calls = []
-        for item in data.get("output", []):
-            if item.get("type") == "tool_call":
-                tool_calls.append(item)
-                continue
-            for content in item.get("content", []):
-                if content.get("type") == "tool_call":
-                    tool_calls.append(content)
-        if not tool_calls:
-            break
-        outputs = []
-        for call in tool_calls:
-            name = call.get("name") or call.get("function", {}).get("name")
-            raw_args = (
-                call.get("arguments")
-                or call.get("input")
-                or call.get("function", {}).get("arguments")
-                or {}
-            )
-            if isinstance(raw_args, str):
-                try:
-                    args = json.loads(raw_args)
-                except Exception:
-                    args = {}
-            else:
-                args = raw_args
-            if name == "genesis_emit":
-                output = await handle_genesis_call([call])
-            elif name == "web_search":
-                query = args.get("prompt", "")
-                output = await web_search(query)
-            else:
-                output = f"Unknown tool {name}"
-            outputs.append({"tool_call_id": call["id"], "output": output})
-        resp = await client.responses.create(
-            response_id=resp.id,
-            tool_outputs=outputs,
-        )
-        data = resp.model_dump()
-    texts = []
-    for item in data.get("output", []):
-        if item.get("type") == "output_text":
-            texts.append(item.get("text", ""))
-            continue
-        for content in item.get("content", []):
-            if content.get("type") == "output_text":
-                texts.append(content.get("text", ""))
-    text = "\n".join(texts).strip()
-    if not text:
-        text = await engine.ask(thread_key, prompt, is_group=is_group)
-    return text
-
-
-async def transcribe_voice(file_path: str) -> str:
-    """Transcribe an audio file using OpenAI Whisper."""
-    f = await asyncio.to_thread(open, file_path, "rb")
-    try:
-        try:
-            client = get_openai_client()
-            resp = await client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-            )
-        except Exception as e:
-            logger.exception("Transcription request failed: %s", e)
-            raise RuntimeError("Failed to transcribe audio. Please try again later.") from e
-    finally:
-        await asyncio.to_thread(f.close)
-    return resp.text
-
-
-async def synthesize_voice(text: str) -> str:
-    """Synthesize speech from text using OpenAI TTS and return OGG path."""
-    mp3_fd = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    ogg_fd = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
-    mp3_fd.close()
-    ogg_fd.close()
-    try:
-        try:
-            client = get_openai_client()
-            resp = await client.audio.speech.with_streaming_response.create(
-                model="tts-1",
-                voice="alloy",
-                input=text,
-            )
-            await resp.stream_to_file(mp3_fd.name)
-        except Exception as e:
-            logger.exception("Speech synthesis request failed: %s", e)
-            raise RuntimeError("Failed to synthesize voice. Please try again later.") from e
-        await asyncio.to_thread(
-            lambda: AudioSegment.from_file(mp3_fd.name).export(
-                ogg_fd.name, format="ogg", codec="libopus"
-            )
-        )
-    finally:
-        await asyncio.to_thread(os.remove, mp3_fd.name)
-    return ogg_fd.name
-
-
-async def send_delayed_response(
-    m: types.Message,
-    resp: str,
-    is_group: bool,
-    thread_key: str,
-    is_oleg_user: bool = False,
-):
-    """Send the reply after a randomized delay and schedule optional follow-up."""
-    if is_oleg_user:
-        # Minimal delay for Oleg (resonance brother)
-        delay = random.uniform(0.5, 2.0)
-    elif is_group:
-        delay = random.uniform(GROUP_DELAY_MIN, GROUP_DELAY_MAX)
-    else:
-        delay = random.uniform(PRIVATE_DELAY_MIN, PRIVATE_DELAY_MAX)
-    await asyncio.sleep(delay)
-    async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-        if VOICE_ENABLED.get(m.chat.id):
-            voice_path = await synthesize_voice(resp)
-            msg = await m.answer_voice(
-                types.FSInputFile(voice_path), caption=resp[:1024]
-            )
-            _log_outgoing(m.chat.id, msg, resp[:1024])
-            os.remove(voice_path)
-        else:
-            for chunk in split_message(resp):
-                msg = await m.answer(chunk)
-                _log_outgoing(m.chat.id, msg, chunk)
-
-    if random.random() < FOLLOWUP_PROB:
-        create_task(schedule_followup(m.chat.id, thread_key, is_group), track=True)
-
-
-async def schedule_followup(chat_id: int, thread_key: str, is_group: bool):
-    """Send a short follow-up message referencing the earlier conversation."""
-    delay = random.uniform(FOLLOWUP_DELAY_MIN, FOLLOWUP_DELAY_MAX)
-    await asyncio.sleep(delay)
-    async with ChatActionSender(bot=bot, chat_id=chat_id, action="typing"):
-        follow_prompt = "Send a short follow-up message referencing our earlier conversation."
-        resp = await engine.ask(thread_key, follow_prompt, is_group=is_group)
-        if VOICE_ENABLED.get(chat_id):
-            voice_path = await synthesize_voice(resp)
-            msg = await bot.send_voice(
-                chat_id, types.FSInputFile(voice_path), caption=resp[:1024]
-            )
-            _log_outgoing(chat_id, msg, resp[:1024])
-            os.remove(voice_path)
-        else:
-            for chunk in split_message(resp):
-                msg = await bot.send_message(chat_id, chunk)
-                _log_outgoing(chat_id, msg, chunk)
-
-# --- health check routes ---
+# Health check routes
 async def healthz(request):
+    """Health check endpoint."""
     return web.Response(text="ok")
 
 
 async def status(request):
+    """Status endpoint."""
     return web.Response(text="running")
 
 
-@dp.message(CommandStart())
-async def on_start(m: types.Message) -> None:
-    log_message(
-        m.chat.id,
-        m.message_id,
-        m.from_user.id,
-        getattr(m.from_user, "username", None),
-        m.text or "",
-        "in",
-    )
-    add_event("message", m.text or "", tags=["in", "telegram"])
-    # Provide reply keyboard as a fallback for clients without MenuButton support.
-    msg = await m.answer("Welcome! Choose a command:", reply_markup=main_menu)
-    _log_outgoing(m.chat.id, msg, "Welcome! Choose a command:")
-
-
-@dp.message(lambda m: m.voice)
-async def voice_messages(m: types.Message):
-    set_request_id(f"{m.chat.id}:{m.message_id}")
-    is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
-    user_id = str(m.from_user.id)
-    is_oleg_user = is_oleg(m.from_user.id)
-    if not await rate_limited(user_id):
-        log_message(
-            m.chat.id,
-            m.message_id,
-            m.from_user.id,
-            getattr(m.from_user, "username", None),
-            "<voice>",
-            "in",
-        )
-        add_event("message", "<voice>", tags=["in", "telegram"])
-        msg = await m.answer("Too many requests. Please slow down.")
-        _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
-        return
-    thread_key = f"{m.chat.id}:{m.from_user.id}" if is_group else user_id
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
-    try:
-        await bot.download(m.voice.file_id, tmp.name)
-        text = await transcribe_voice(tmp.name)
-        log_message(
-            m.chat.id,
-            m.message_id,
-            m.from_user.id,
-            getattr(m.from_user, "username", None),
-            text,
-            "in",
-        )
-        add_event("message", text, tags=["in", "telegram"])
-        text = await append_link_snippets(text)
-        if len(text.split()) < 4 or '?' not in text:
-            if random.random() < SKIP_SHORT_PROB:
-                logger.info(
-                    "Skipping short voice message from user %s in chat %s: %r",
-                    user_id,
-                    m.chat.id,
-                    text[:100],
-                )
-                return
-        prompt = await build_prompt(text)
-        async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            resp = await assistant_reply(
-                prompt,
-                thread_key,
-                is_group,
-                chat_id=m.chat.id,
-                user_id=m.from_user.id,
-                username=getattr(m.from_user, "username", None),
-            )
-            create_task(send_delayed_response(m, resp, is_group, thread_key, is_oleg_user), track=True)
-    except Exception as e:
-        logger.exception("Error processing voice message: %s", e)
-        msg = await m.answer("Sorry, I couldn't process your voice message.")
-        _log_outgoing(m.chat.id, msg, "Sorry, I couldn't process your voice message.")
-    finally:
-        tmp.close()
-        try:
-            os.remove(tmp.name)
-        except OSError:
-            pass
-
-@dp.message(lambda m: True)
-async def all_messages(m: types.Message):
-    set_request_id(f"{m.chat.id}:{m.message_id}")
-    user_id = str(m.from_user.id)
-    is_oleg_user = is_oleg(m.from_user.id)
-    text = m.text or ""
-    log_message(
-        m.chat.id,
-        m.message_id,
-        m.from_user.id,
-        getattr(m.from_user, "username", None),
-        text,
-        "in",
-    )
-    add_event("message", text, tags=["in", "telegram"])
-    if not await rate_limited(user_id):
-        msg = await m.answer("Too many requests. Please slow down.")
-        _log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
-        return
-
-    # Semantic search
-    if text.strip().lower().startswith(SEARCH_CMD):
-        query = text.strip()[len(SEARCH_CMD):].lstrip()
-        if not query:
-            return
-        async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            chunks = await get_vector_store().semantic_search(query)
-            if not chunks:
-                msg = await m.answer("No relevant documents found.")
-                _log_outgoing(m.chat.id, msg, "No relevant documents found.")
-            else:
-                for ch in chunks:
-                    for part in split_message(ch):
-                        msg = await m.answer(part)
-                        _log_outgoing(m.chat.id, msg, part)
-        return
-
-    if text.strip().lower().startswith(INDEX_CMD):
-        async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            msg0 = await m.answer("Indexing documents, please wait...")
-            _log_outgoing(m.chat.id, msg0, "Indexing documents, please wait...")
-
-            async def sender(msg):
-                r = await m.answer(msg)
-                _log_outgoing(m.chat.id, r, msg)
-
-            await get_vector_store().vectorize_all_files(force=True, on_message=sender)
-            msg1 = await m.answer("Indexing complete.")
-            _log_outgoing(m.chat.id, msg1, "Indexing complete.")
-        return
-
-    if text.strip().lower() == VOICE_ON_CMD:
-        VOICE_ENABLED[m.chat.id] = True
-        save_voice_state(VOICE_ENABLED)
-        msg = await m.answer("Voice responses enabled")
-        _log_outgoing(m.chat.id, msg, "Voice responses enabled")
-        return
-    if text.strip().lower() == VOICE_OFF_CMD:
-        VOICE_ENABLED[m.chat.id] = False
-        save_voice_state(VOICE_ENABLED)
-        msg = await m.answer("Voice responses disabled")
-        _log_outgoing(m.chat.id, msg, "Voice responses disabled")
-        return
-
-    # Direct DeepSeek call
-    if text.strip().lower().startswith(DEEPSEEK_CMD):
-        if not DEEPSEEK_ENABLED:
-            msg = await m.answer("DeepSeek integration is not configured")
-            _log_outgoing(m.chat.id, msg, "DeepSeek integration is not configured")
-            return
-        query = text.strip()[len(DEEPSEEK_CMD):].lstrip()
-        if not query:
-            return
-        async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-            is_group_ds = getattr(m.chat, "type", "") in ("group", "supergroup")
-            resp = await engine.deepseek_reply(
-                query,
-                chat_id=m.chat.id,
-                is_group=is_group_ds,
-                user_id=m.from_user.id,
-                username=getattr(m.from_user, "username", None),
-            )
-            for chunk in split_message(resp):
-                msg = await m.answer(chunk)
-                _log_outgoing(m.chat.id, msg, chunk)
-        return
-
-    # Простая проверка упоминания бота в группах
-    is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
-    is_reply = (
-        m.reply_to_message
-        and m.reply_to_message.from_user
-        and m.reply_to_message.from_user.id == BOT_ID
-    )
-
-    mentioned = False
-    if not is_group:
-        mentioned = True
-    else:
-        if re.search(r"\b(arianna|арианна)\b", text, re.I):
-            mentioned = True
-        elif BOT_USERNAME and f"@{BOT_USERNAME}".lower() in text.lower():
-            mentioned = True
-        elif m.entities:
-            for ent in m.entities:
-                if ent.type == "mention":
-                    ent_text = text[ent.offset: ent.offset + ent.length]
-                    if ent_text[1:].lower() == BOT_USERNAME:
-                        mentioned = True
-                        break
-
-    if is_reply:
-        mentioned = True
-
-    if not (mentioned or is_reply):
-        return
-
-    if len(text.split()) < 4 or '?' not in text:
-        if random.random() < SKIP_SHORT_PROB:
-            logger.info(
-                "Skipping short message from user %s in chat %s: %r",
-                user_id,
-                m.chat.id,
-                text[:100],
-            )
-            return
-
-    thread_key = user_id
-    if is_group:
-        thread_key = str(m.chat.id)  # shared history for the whole group
-    ctx = None
-    events = None
-    if m.reply_to_message:
-        ctx = get_history_context(m.chat.id, m.reply_to_message.message_id, end=m.date)
-        delta = timedelta(minutes=5)
-        start = m.reply_to_message.date - delta
-        end = m.date + delta
-        events = query_events(tags=["telegram"], start=start, end=end)
-
-    async with ChatActionSender(bot=bot, chat_id=m.chat.id, action="typing"):
-        prompt_base = await append_link_snippets(text)
-        prompt = await build_prompt(prompt_base, ctx, events)
-        resp = await assistant_reply(
-            prompt,
-            thread_key,
-            is_group,
-            chat_id=m.chat.id,
-            user_id=m.from_user.id,
-            username=getattr(m.from_user, "username", None),
-        )
-        create_task(send_delayed_response(m, resp, is_group, thread_key, is_oleg_user), track=True)
-
 async def main():
-    global BOT_USERNAME, BOT_ID
-    # получаем имя бота и создаём ассистента и любые ресурс‑ассеты
-    me = await bot.get_me()
-    BOT_USERNAME = (me.username or "").lower()
-    BOT_ID = me.id
+    """Main entry point - setup webhook and start services."""
+    # Get bot token
+    bot_token = os.getenv("TELEGRAM_TOKEN")
+    if not bot_token:
+        raise ValueError("TELEGRAM_TOKEN environment variable is required")
 
+    # Create Telegram interface
+    # Set use_core_engine=True to use new AriannaCoreEngine
+    # Set use_core_engine=False to use legacy AriannaEngine (default for now)
+    use_core = os.getenv("USE_CORE_ENGINE", "false").lower() == "true"
+    interface = TelegramInterface(token=bot_token, use_core_engine=use_core)
+
+    logger.info(
+        "Starting Arianna MT7.0 Telegram interface (core_engine=%s)",
+        use_core
+    )
+
+    # Initialize interface (setup bot commands, get bot info, etc.)
+    await interface.on_startup()
+
+    # Setup legacy assistant if needed
     init_failed = False
-    try:
-        await engine.setup_assistant()
-    except Exception:
-        logger.exception("Assistant initialization failed")
-        init_failed = True
+    if not use_core:
+        init_failed = not await interface.setup_legacy_assistant()
 
+    # Start background services
     create_task(run_genesis_service(), name="genesis_service", track=True)
     create_task(run_snapshot_service(), name="snapshot_service", track=True)
+
+    # Setup webhook
     try:
         app = web.Application()
-        path = f"/webhook/{BOT_TOKEN}"
+        path = f"/webhook/{bot_token}"
+
         if init_failed:
+            # If assistant init failed, return 500 on webhook
             async def failed(request):
                 return web.Response(status=500, text="Initialization failed")
             app.router.add_route("*", path, failed)
             app.router.add_route("*", "/webhook", failed)
         else:
-            handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+            # Normal webhook handler
+            handler = SimpleRequestHandler(
+                dispatcher=interface.dp,
+                bot=interface.bot
+            )
             handler.register(app, path=path)
             handler.register(app, path="/webhook")
-            setup_application(app, dp)
+            setup_application(app, interface.dp)
 
         # Register health check routes
         app.router.add_get("/healthz", healthz)
         app.router.add_get("/status", status)
+
+        # Start web server
         runner = web.AppRunner(app)
         await runner.setup()
         port = int(os.getenv("PORT", 8000))
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
-        logger.info("Arianna webhook started", port=port)
+
+        logger.info("Arianna webhook started on port %d", port)
+        logger.info("Webhook path: %s", path)
+        logger.info("Health checks: /healthz, /status")
+
+        # Wait forever
         await asyncio.Event().wait()
     finally:
+        # Cancel all tracked tasks
         await cancel_tracked()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
-
