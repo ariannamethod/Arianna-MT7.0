@@ -103,7 +103,6 @@ class SQLiteVectorStore:
         """
         self.db_path = db_path
         self.openai_client = openai_client
-        self._lock = threading.Lock()
 
         # Ensure data directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -135,10 +134,7 @@ class SQLiteVectorStore:
         conn = self._get_connection()
 
         try:
-            # Enable WAL mode (Write-Ahead Logging) for concurrent access
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-
+            # WAL mode already enabled in _get_connection()
             conn.executescript("""
                 -- Files metadata table
                 CREATE TABLE IF NOT EXISTS files (
@@ -349,7 +345,7 @@ class SQLiteVectorStore:
             raise
 
     def close(self):
-        """Close all thread-local connections."""
+        """Close connection for current thread."""
         if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
             try:
                 _thread_local.conn.close()
