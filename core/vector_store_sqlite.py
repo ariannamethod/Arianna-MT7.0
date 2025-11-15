@@ -1,12 +1,19 @@
 """
-SQLite-based vector store with FTS5 full-text search.
+SQLite-based document store with FTS5 full-text (keyword) search.
 
-Drop-in replacement for Pinecone-based vector store.
+This is a simplified, local alternative to Pinecone-based vector stores.
+
+Note: This implementation uses SQLite's FTS5 for keyword-based search,
+not vector embeddings. Pinecone performs semantic vector search using
+embeddings, while FTS5 performs keyword-based full-text search.
+As a result, search results may differ from true semantic search.
+
 Benefits:
 - Local storage (no external API)
-- Fast FTS5 search
+- Fast FTS5 keyword search
 - No dependencies on external services
-- Simple setup
+- WAL mode for concurrent reads/writes
+- Connection pooling for better performance
 """
 
 import os
@@ -14,12 +21,17 @@ import glob
 import hashlib
 import sqlite3
 import asyncio
+import threading
 from typing import Optional, Any
 from pathlib import Path
 
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Thread-local storage for SQLite connections
+_thread_local = threading.local()
 
 
 def file_hash(fname: str) -> str:
@@ -52,12 +64,26 @@ def chunk_text(text: str, chunk_size: int = 900, overlap: int = 120) -> list[str
     return chunks
 
 
+def escape_fts5_query(query: str) -> str:
+    """
+    Escape special FTS5 characters in query string.
+
+    FTS5 has special meaning for: " * - : ( )
+    We'll quote the query to treat it as a literal phrase.
+    """
+    # Remove existing quotes
+    query = query.replace('"', '')
+    # Wrap in quotes for phrase search (treats as literal)
+    return f'"{query}"'
+
+
 class SQLiteVectorStore:
     """
-    SQLite-based vector store with FTS5 full-text search.
+    SQLite-based document store with FTS5 full-text search.
 
     Compatible API with Pinecone-based VectorStore for drop-in replacement.
-    Uses SQLite FTS5 for fast full-text search without external dependencies.
+    Uses SQLite FTS5 for fast keyword-based full-text search without
+    external dependencies.
     """
 
     def __init__(
@@ -77,20 +103,42 @@ class SQLiteVectorStore:
         """
         self.db_path = db_path
         self.openai_client = openai_client
+        self._lock = threading.Lock()
 
         # Ensure data directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Initialize database
+        # Initialize database with WAL mode
         self._init_db()
 
-        logger.info("SQLiteVectorStore initialized at %s", db_path)
+        logger.info("SQLiteVectorStore initialized at %s (WAL mode enabled)", db_path)
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """
+        Get thread-local SQLite connection.
+
+        Creates a new connection for each thread, enabling safe concurrent access.
+        WAL mode allows multiple readers and one writer simultaneously.
+        """
+        if not hasattr(_thread_local, 'conn') or _thread_local.conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            # Enable WAL mode for concurrent reads/writes
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Better performance
+            conn.execute("PRAGMA synchronous=NORMAL")
+            _thread_local.conn = conn
+            logger.debug("Created new SQLite connection for thread %s", threading.current_thread().name)
+        return _thread_local.conn
 
     def _init_db(self):
-        """Initialize database schema with FTS5."""
-        conn = sqlite3.connect(self.db_path)
+        """Initialize database schema with FTS5 and enable WAL mode."""
+        conn = self._get_connection()
 
         try:
+            # Enable WAL mode (Write-Ahead Logging) for concurrent access
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+
             conn.executescript("""
                 -- Files metadata table
                 CREATE TABLE IF NOT EXISTS files (
@@ -118,12 +166,10 @@ class SQLiteVectorStore:
                 );
             """)
             conn.commit()
-            logger.debug("Database schema initialized")
+            logger.debug("Database schema initialized with WAL mode")
         except Exception as e:
-            logger.error("Failed to initialize database: %s", e)
+            logger.error("Failed to initialize database: %s", e, exc_info=True)
             raise
-        finally:
-            conn.close()
 
     async def vectorize_all_files(
         self,
@@ -163,7 +209,7 @@ class SQLiteVectorStore:
         pattern: str,
     ) -> dict[str, list[str]]:
         """Synchronous implementation of vectorize_all_files."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
 
         try:
             current = scan_files(pattern)
@@ -197,19 +243,18 @@ class SQLiteVectorStore:
                 conn.execute("DELETE FROM chunks WHERE file_path = ?", (file_path,))
                 conn.execute("DELETE FROM chunks_fts WHERE file_path = ?", (file_path,))
 
-                # Insert new chunks
-                for idx, chunk in enumerate(chunks):
-                    # Insert into metadata table
-                    conn.execute(
-                        "INSERT INTO chunks (file_path, chunk_idx, content) VALUES (?, ?, ?)",
-                        (file_path, idx, chunk)
-                    )
+                # Prepare batch data for executemany
+                chunk_data = [(file_path, idx, chunk) for idx, chunk in enumerate(chunks)]
 
-                    # Insert into FTS5 table
-                    conn.execute(
-                        "INSERT INTO chunks_fts (file_path, chunk_idx, content) VALUES (?, ?, ?)",
-                        (file_path, idx, chunk)
-                    )
+                # Batch insert into both tables using executemany (more efficient)
+                conn.executemany(
+                    "INSERT INTO chunks (file_path, chunk_idx, content) VALUES (?, ?, ?)",
+                    chunk_data
+                )
+                conn.executemany(
+                    "INSERT INTO chunks_fts (file_path, chunk_idx, content) VALUES (?, ?, ?)",
+                    chunk_data
+                )
 
                 # Update file metadata
                 conn.execute(
@@ -243,11 +288,9 @@ class SQLiteVectorStore:
             }
 
         except Exception as e:
-            logger.error("Indexing failed: %s", e)
+            logger.error("Indexing failed: %s", e, exc_info=True)
             conn.rollback()
             raise
-        finally:
-            conn.close()
 
     async def semantic_search(
         self,
@@ -256,7 +299,9 @@ class SQLiteVectorStore:
         top_k: int = 5
     ) -> list[str]:
         """
-        Perform full-text search using SQLite FTS5.
+        Perform keyword-based full-text search using SQLite FTS5.
+
+        Note: This is keyword search, not semantic/vector search.
 
         Parameters
         ----------
@@ -278,16 +323,19 @@ class SQLiteVectorStore:
 
     def _semantic_search_sync(self, query: str, top_k: int) -> list[str]:
         """Synchronous implementation of semantic_search."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
 
         try:
+            # Escape FTS5 special characters
+            escaped_query = escape_fts5_query(query)
+
             # FTS5 MATCH query with rank ordering
             cursor = conn.execute("""
                 SELECT content FROM chunks_fts
                 WHERE content MATCH ?
                 ORDER BY rank
                 LIMIT ?
-            """, (query, top_k))
+            """, (escaped_query, top_k))
 
             results = [row[0] for row in cursor.fetchall()]
 
@@ -296,17 +344,22 @@ class SQLiteVectorStore:
             return results
 
         except Exception as e:
-            logger.error("Search failed: %s", e)
-            return []
-        finally:
-            conn.close()
+            logger.error("Search failed for query '%s': %s", query[:50], e, exc_info=True)
+            # Re-raise to let caller handle the error
+            raise
 
     def close(self):
-        """Close database (no-op for connection-per-query model)."""
-        pass
+        """Close all thread-local connections."""
+        if hasattr(_thread_local, 'conn') and _thread_local.conn is not None:
+            try:
+                _thread_local.conn.close()
+                _thread_local.conn = None
+                logger.debug("Closed SQLite connection for thread %s", threading.current_thread().name)
+            except Exception as e:
+                logger.warning("Error closing connection: %s", e)
 
 
 # Backward compatibility alias
 VectorStore = SQLiteVectorStore
 
-__all__ = ['SQLiteVectorStore', 'VectorStore', 'chunk_text', 'scan_files', 'file_hash']
+__all__ = ['SQLiteVectorStore', 'VectorStore', 'chunk_text', 'scan_files', 'file_hash', 'escape_fts5_query']

@@ -358,7 +358,7 @@ class TelegramInterface:
             else:
                 # Legacy assistant_reply logic (copied from server_arianna.py)
                 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
-                from utils.arianna_engine import web_search
+                from core.engine import web_search
 
                 if os.getenv("OPENAI_API_KEY") == "key":
                     return await self.legacy_engine.ask(
@@ -429,7 +429,7 @@ class TelegramInterface:
                             output = await handle_genesis_call([call])
                         elif name == "web_search":
                             query = args.get("prompt", "")
-                            output = await web_search(query)
+                            output = await web_search(query, self.openai_client)
                         else:
                             output = f"Unknown tool {name}"
                         outputs.append({"tool_call_id": call["id"], "output": output})
