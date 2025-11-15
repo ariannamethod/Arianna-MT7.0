@@ -17,7 +17,7 @@ async def web_search(prompt: str) -> str:
     """Execute OpenAI web search tool and return raw JSON string."""
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     resp = await client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         input=prompt,
         tools=[{"type": "web_search"}],
         timeout=HTTP_TIMEOUT,
