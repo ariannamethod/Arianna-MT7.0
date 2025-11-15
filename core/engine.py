@@ -43,7 +43,7 @@ async def web_search(prompt: str, client: AsyncOpenAI) -> str:
         Raw JSON response from web search
     """
     resp = await client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         input=prompt,
         tools=[{"type": "web_search"}],
         timeout=HTTP_TIMEOUT,
@@ -209,7 +209,7 @@ class AriannaCoreEngine:
         Process message using OpenAI Responses API.
 
         This is the primary method for generating responses.
-        Uses gpt-4.1-mini with optional tool calls (Genesis, web_search).
+        Uses gpt-4.1 with optional tool calls (Genesis, web_search).
 
         Parameters
         ----------
@@ -262,7 +262,7 @@ class AriannaCoreEngine:
         # Call OpenAI Responses API
         try:
             response = await self.openai_client.responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-4.1",
                 messages=messages,
                 tools=tools if tools else None,
                 timeout=HTTP_TIMEOUT,
