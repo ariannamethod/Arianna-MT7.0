@@ -19,7 +19,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from utils.arianna_engine import AriannaEngine, web_search
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
 from utils.split_message import split_message
-from utils.vector_store import VectorStore
+from core.vector_store_sqlite import SQLiteVectorStore
 from utils.text_helpers import extract_text_from_url, _extract_links
 from utils.config import HTTP_TIMEOUT
 from utils.deepseek_search import DEEPSEEK_ENABLED
@@ -70,7 +70,12 @@ def get_openai_client():
 def get_vector_store():
     global vector_store
     if vector_store is None:
-        vector_store = VectorStore(openai_client=get_openai_client())
+        # SQLite vector store - local, fast, no Pinecone API dependency
+        db_path = os.getenv("VECTOR_DB_PATH", "data/vectors.db")
+        vector_store = SQLiteVectorStore(
+            db_path=db_path,
+            openai_client=get_openai_client()  # For API compatibility
+        )
     return vector_store
 
 
