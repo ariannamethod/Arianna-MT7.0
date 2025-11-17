@@ -5,7 +5,7 @@ This is the main entry point for the Telegram interface.
 All Telegram-specific logic has been moved to interfaces/telegram_bot.py.
 This file handles:
 - Webhook setup
-- Genesis and Snapshot services
+- Snapshot service
 - Health check routes
 """
 
@@ -17,7 +17,6 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from interfaces.telegram_bot import TelegramInterface
 from utils.tasks import create_task, cancel_tracked
-from utils.genesis_service import run_genesis_service
 from utils.snapshot_service import run_snapshot_service
 from utils.logging import get_logger
 
@@ -63,7 +62,6 @@ async def main():
         init_failed = not await interface.setup_legacy_assistant()
 
     # Start background services
-    create_task(run_genesis_service(), name="genesis_service", track=True)
     create_task(run_snapshot_service(), name="snapshot_service", track=True)
 
     # Setup webhook
