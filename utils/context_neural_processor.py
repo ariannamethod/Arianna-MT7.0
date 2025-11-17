@@ -81,14 +81,11 @@ try:
 except ImportError:
     yaml = None
     YAMLError = ValueError
-try:
-    import rarfile
-    from rarfile import Error as RarError
-except ImportError:
-    rarfile = None
+# rarfile has problematic dependencies - lazy load in _extract_rar to avoid import errors
+rarfile = None
 
-    class RarError(Exception):
-        pass
+class RarError(Exception):
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -741,11 +738,19 @@ class FileHandler:
     async def _extract_rar(self, path: str) -> str:
         async with self._semaphore:
             try:
-                if not rarfile:
-                    raise RuntimeError("rarfile not installed")
+                # Lazy load rarfile to avoid import errors
+                rarfile_module = None
+                try:
+                    import rarfile as rarfile_module
+                    from rarfile import Error as RarErrorLocal
+                except Exception:
+                    pass
+
+                if not rarfile_module:
+                    raise RuntimeError("rarfile not installed or has dependency issues")
                 texts: List[str] = []
                 total_size = 0
-                with rarfile.RarFile(path) as rf:
+                with rarfile_module.RarFile(path) as rf:
                     for info in rf.infolist():
                         if total_size >= self.max_archive_size:
                             break
