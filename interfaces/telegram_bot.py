@@ -98,7 +98,7 @@ class TelegramInterface:
             )
             logger.info("Using new AriannaCoreEngine")
         else:
-            self.legacy_engine = AriannaEngine()
+            self.legacy_engine = AriannaEngine(vector_store=self.vector_store)
             logger.info("Using legacy AriannaEngine (backward compatibility)")
 
         # Oleg IDs (resonance brother)
@@ -426,7 +426,7 @@ class TelegramInterface:
                         else:
                             args = raw_args
                         if name == "genesis_emit":
-                            output = await handle_genesis_call([call])
+                            output = await handle_genesis_call([call], vector_store=self.vector_store)
                         elif name == "web_search":
                             query = args.get("prompt", "")
                             output = await web_search(query, self.openai_client)
