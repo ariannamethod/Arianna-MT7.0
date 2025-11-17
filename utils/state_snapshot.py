@@ -278,3 +278,15 @@ class StateSnapshotter:
                 hour=0, minute=0, second=0, microsecond=0
             )
             await asyncio.sleep(max(1, (next_day - now).total_seconds()))
+
+
+async def run_snapshot_service() -> None:
+    """
+    Run daily snapshot service - wrapper for StateSnapshotter.
+
+    Creates StateSnapshotter instance and runs the collection loop.
+    This function is called as a background task from server_arianna.py.
+    """
+    snapshotter = StateSnapshotter()
+    logger.info("Starting state snapshot service (daily collection)")
+    await snapshotter.run()

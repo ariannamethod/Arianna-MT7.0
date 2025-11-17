@@ -17,7 +17,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from interfaces.telegram_bot import TelegramInterface
 from utils.tasks import create_task, cancel_tracked
-from utils.snapshot_service import run_snapshot_service
+from utils.state_snapshot import run_snapshot_service
 from utils.repo_monitor import check_repository_changes
 from utils.logging import get_logger
 
