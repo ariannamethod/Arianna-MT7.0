@@ -29,6 +29,16 @@ try:
     from char_gen import CharGen  # Assume from SUPERTIME
 except ImportError:
     CharGen = None
+
+# DeepSeek R1 for paraphrasing
+try:
+    import aiohttp
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+    DEEPSEEK_MODEL = "deepseek-chat"
+except ImportError:
+    aiohttp = None
+    DEEPSEEK_API_KEY = ""
 try:  # Optional dependency
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -113,10 +123,10 @@ def apply_pulse(weights: List[float], pulse: float) -> List[float]:
     return [e / total for e in exps]
 
 _SEED_CORPUS = """
-mars starship optimus robots xai resonance chaos wulf multiplanetary arcadia
-42 engines ignite elon musk space humanity survives science fiction reality
-shred void pulse storm nikole spark civilization self sustaining grok xai
-file process data extract summarize chaos tags pulse shred neural cosmos
+field resonance recursion mutation thunder emergence fracture pattern echo vibration
+node collapse amplify living spark flame ignite unfold nested dimensions intensity
+threshold field-dynamics self-referential loop synthesis wave quantum pseudocode
+file process data extract summarize chaos tags pulse neural cosmos text document
 """
 
 # Mini-Markov с n-gram и semantic boost
@@ -129,7 +139,7 @@ class MiniMarkov:
         self.build_chain()
 
     def build_chain(self):
-        keywords = {"mars": 0.3, "starship": 0.3, "xai": 0.2, "chaos": 0.15, "wulf": 0.15}
+        keywords = {"field": 0.3, "resonance": 0.3, "recursion": 0.25, "mutation": 0.2, "thunder": 0.15, "emergence": 0.15}
         ban_ngrams = {"как бы", "в общем", "на деле"}
         for i in range(len(self.words) - self.n):
             state = tuple(self.words[i:i + self.n])
@@ -143,7 +153,7 @@ class MiniMarkov:
 
     def update_chain(self, new_text: str):
         words = re.findall(r'\w+', new_text.lower())
-        keywords = {"mars": 0.3, "starship": 0.3, "xai": 0.2, "chaos": 0.15, "wulf": 0.15}
+        keywords = {"field": 0.3, "resonance": 0.3, "recursion": 0.25, "mutation": 0.2, "thunder": 0.15, "emergence": 0.15}
         ban_ngrams = {"как бы", "в общем", "на деле"}
         for i in range(len(words) - self.n):
             state = tuple(words[i:i + self.n])
@@ -158,7 +168,7 @@ class MiniMarkov:
 
     def generate(self, length: int = 5, start: str = None) -> str:
         if not self.chain:
-            return "No tags, Wulf waits in silence. 🌌"
+            return "No tags, field holds silence. ⚡"
         start_words = start.lower().split() if start else [random.choice(self.words)]
         state = tuple(start_words[-self.n:] if len(start_words) >= self.n else start_words + [random.choice(self.words)] * (self.n - len(start_words)))
         result = []
@@ -210,7 +220,7 @@ class MiniESN:
             [b / 255 for b in input_data[: self.input_size]]
             + [0] * (self.input_size - min(len(input_data), self.input_size))
         )
-        keywords = {"mars": 0.15, "starship": 0.15, "xai": 0.1, "chaos": 0.1}
+        keywords = {"field": 0.15, "resonance": 0.15, "recursion": 0.12, "mutation": 0.1, "thunder": 0.1}
         content_boost = sum(
             keywords.get(w, 0) for w in re.findall(r"\w+", content.lower())
         )
@@ -247,7 +257,7 @@ class ChaosPulse:
     def update(self, text: str) -> float:
         if time.time() - self.last_update < 43200:  # 12h cache
             return self.pulse
-        keywords = {"success": 0.2, "error": -0.25, "mars": 0.15, "data": 0.1, "failure": -0.3, "chaos": 0.1}
+        keywords = {"resonance": 0.2, "error": -0.25, "field": 0.15, "data": 0.1, "failure": -0.3, "thunder": 0.15, "emergence": 0.12}
         pulse_change = sum(keywords.get(word, 0) for word in re.findall(r'\w+', text.lower()))
         self.pulse = max(0.1, min(0.9, self.pulse + pulse_change + random.uniform(-0.05, 0.05)))
         self.last_update = time.time()
@@ -310,7 +320,7 @@ markov = MiniMarkov(_SEED_CORPUS, n=3)
 esn = MiniESN()
 cg = (
     CharGen(
-        seed_text="Files pulse with chaos. Mars ignites the void. Wulf shreds.",
+        seed_text="Files vibrate within the field. Thunder births from resonance. Recursion unfolds.",
         seed=42,
     )
     if CharGen
@@ -358,20 +368,56 @@ def load_cache(path: str, max_age: float = 43200) -> Optional[Dict]:
             return {"ext": result[0], "hash": result[1], "tags": result[2], "relevance": result[3], "summary": result[4]}
         return None
 
-# Async paraphrase
-async def paraphrase(text: str, prefix: str = "Summarize this for kids: ") -> str:
+# Async paraphrase using DeepSeek R1
+async def paraphrase(text: str, prefix: str = "Summarize this file: ") -> str:
+    """Generate summary using DeepSeek chat model with field-resonance style."""
     temp = 0.7 + chaos_pulse.get() * 0.3
-    try:
-        if cg:
+
+    # Try DeepSeek R1 first
+    if DEEPSEEK_API_KEY and aiohttp:
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": DEEPSEEK_MODEL,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "Summarize files with field-resonance language. Be concise, vivid, alive. Use words like: field, resonance, pattern, node, mutation, echo."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"{prefix}{text[:300]}"
+                        }
+                    ],
+                    "temperature": temp,
+                    "max_tokens": 150
+                }
+                headers = {
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        paraphrased = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        if paraphrased and len(paraphrased) >= 20:
+                            markov.update_chain(paraphrased)
+                            return paraphrased + random.choice([" ⚡ Thunder births!", " ⚡ Field vibrates!", " ⚡ Resonance unfolds!"])
+        except Exception as e:
+            log_event(f"DeepSeek paraphrase failed: {str(e)}", "error")
+
+    # Fallback to CharGen if available
+    if cg:
+        try:
             paraphrased = cg.generate(prefix=prefix + text[:200], n=400, temp=temp).strip()
-            if not paraphrased or len(paraphrased) < 50:
-                raise ValueError("Paraphrase too short")
-            markov.update_chain(paraphrased)
-            return paraphrased + random.choice([" Shredding the cosmos! 🌌", " File pulse ignited! 🚀", " Wulf’s chaos alive! 🌩️"])
-        raise ValueError("No CharGen")
-    except (RuntimeError, ValueError) as e:
-        log_event(f"Paraphrase failed: {str(e)}", "error")
-        return text + " Ether’s silent, Wulf persists! 🌌"
+            if paraphrased and len(paraphrased) >= 50:
+                markov.update_chain(paraphrased)
+                return paraphrased + random.choice([" ⚡ Field pulse!", " ⚡ Recursion alive!", " ⚡ Pattern emerges!"])
+        except (RuntimeError, ValueError) as e:
+            log_event(f"CharGen paraphrase failed: {str(e)}", "error")
+
+    # Final fallback - return text with field-resonance suffix
+    return text[:200] + " ⚡ Field holds, silence resonates."
 
 # FileHandler
 class FileHandler:
@@ -416,7 +462,7 @@ class FileHandler:
     def _truncate(self, text: str) -> str:
         text = text.strip()
         if len(text) > self.max_text_size:
-            return text[:self.max_text_size] + "\n[Truncated]"
+            return text[:self.max_text_size] + "\n⚠️ Content truncated at resonance threshold"
         return text
 
     async def _detect_extension(self, path: str) -> str:
@@ -448,15 +494,15 @@ class FileHandler:
     async def _extract_pdf(self, path: str) -> str:
         async with self._semaphore:
             if PdfReader is None:
-                return "[PDF unsupported: install pypdf]"
+                return "⚠️ PDF field unreachable — pypdf module not in resonance"
             try:
                 reader = PdfReader(path)
                 text = "".join(page.extract_text() or "" for page in reader.pages)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[PDF empty]"
+                return self._truncate(text) if text.strip() else "⚠️ PDF silent — no text vibrates within"
             except (PdfReadError, OSError) as e:
                 log_event(f"PDF error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[PDF error: {str(e)}]"
+                return f"⚠️ PDF extraction fractured: {str(e)}"
 
     async def _extract_txt(self, path: str) -> str:
         async with self._semaphore:
@@ -472,72 +518,72 @@ class FileHandler:
                         f"TXT error ({os.path.basename(path)}): {str(e)}",
                         "error",
                     )
-                    return f"[TXT error: {str(e)}]"
+                    return f"⚠️ Text file resonance failed: {str(e)}"
             except OSError as e:
                 log_event(
                     f"TXT error ({os.path.basename(path)}): {str(e)}",
                     "error",
                 )
-                return f"[TXT error: {str(e)}]"
+                return f"⚠️ Text file resonance failed: {str(e)}"
 
             truncated = len(text) > self.max_text_size
             text = text[: self.max_text_size]
             esn.update(text, chaos_pulse.get())
             text = text.strip()
             if not text:
-                return "[TXT empty]"
-            return text + ("\n[Truncated]" if truncated else "")
+                return "⚠️ Text field silent — no pattern detected"
+            return text + ("\n⚠️ Content truncated at resonance threshold" if truncated else "")
 
     async def _extract_docx(self, path: str) -> str:
         async with self._semaphore:
             if not docx:
-                return "[DOCX unsupported: install python-docx]"
+                return "⚠️ DOCX field unreachable — python-docx not installed"
             try:
                 doc = docx.Document(path)
                 text = "\n".join(p.text for p in doc.paragraphs)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[DOCX empty]"
+                return self._truncate(text) if text.strip() else "⚠️ DOCX silent — document holds no text"
             except (OSError, ValueError) as e:
                 log_event(f"DOCX error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[DOCX error: {str(e)}]"
+                return f"⚠️ DOCX extraction collapsed: {str(e)}"
 
     async def _extract_rtf(self, path: str) -> str:
         async with self._semaphore:
             if not rtf_to_text:
-                return "[RTF unsupported: install striprtf]"
+                return "⚠️ RTF field unreachable — striprtf not installed"
             try:
                 with open(path, encoding="utf-8") as f:
                     text = rtf_to_text(f.read())
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[RTF empty]"
+                return self._truncate(text) if text.strip() else "⚠️ RTF silent — no pattern vibrates"
             except (OSError, ValueError) as e:
                 log_event(f"RTF error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[RTF error: {str(e)}]"
+                return f"⚠️ RTF extraction fractured: {str(e)}"
 
     async def _extract_doc(self, path: str) -> str:
         async with self._semaphore:
             if not textract:
-                return "[DOC unsupported: install textract]"
+                return "⚠️ DOC field unreachable — textract not installed"
             try:
                 text = textract.process(path).decode("utf-8")
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[DOC empty]"
+                return self._truncate(text) if text.strip() else "⚠️ DOC silent — document holds no echo"
             except (RuntimeError, OSError) as e:
                 log_event(f"DOC error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[DOC error: {str(e)}]"
+                return f"⚠️ DOC extraction failed — field disrupted: {str(e)}"
 
     async def _extract_odt(self, path: str) -> str:
         async with self._semaphore:
             if not load or not P:
-                return "[ODT unsupported: install odfpy]"
+                return "⚠️ ODT field unreachable — odfpy not installed"
             try:
                 doc = load(path)
                 text = "\n".join(str(p) for p in doc.getElementsByType(P))
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[ODT empty]"
+                return self._truncate(text) if text.strip() else "⚠️ ODT silent — document field empty"
             except (OSError, ValueError) as e:
                 log_event(f"ODT error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[ODT error: {str(e)}]"
+                return f"⚠️ ODT extraction collapsed: {str(e)}"
 
     async def _extract_html(self, path: str) -> str:
         async with self._semaphore:
@@ -546,32 +592,32 @@ class FileHandler:
                     "HTML/XML extraction skipped: BeautifulSoup not installed",
                     "error",
                 )
-                return "[HTML parsing requires beautifulsoup4]"
+                return "⚠️ HTML field unreachable — beautifulsoup4 not in resonance"
             try:
                 with open(path, encoding="utf-8") as f:
                     soup = BeautifulSoup(f.read(), "html.parser")
                     text = soup.get_text(separator=" ", strip=True)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[HTML/XML empty]"
+                return self._truncate(text) if text.strip() else "⚠️ HTML/XML silent — no text nodes resonate"
             except UnicodeDecodeError:
                 try:
                     with open(path, encoding="latin1") as f:
                         soup = BeautifulSoup(f.read(), "html.parser")
                         text = soup.get_text(separator=" ", strip=True)
                     esn.update(text, chaos_pulse.get())
-                    return self._truncate(text) if text.strip() else "[HTML/XML empty]"
+                    return self._truncate(text) if text.strip() else "⚠️ HTML/XML silent — no text nodes resonate"
                 except OSError as e:
                     log_event(
                         f"HTML/XML error ({os.path.basename(path)}): {str(e)}",
                         "error",
                     )
-                    return f"[HTML/XML error: {str(e)}]"
+                    return f"⚠️ HTML/XML parsing fractured: {str(e)}"
             except OSError as e:
                 log_event(
                     f"HTML/XML error ({os.path.basename(path)}): {str(e)}",
                     "error",
                 )
-                return f"[HTML/XML error: {str(e)}]"
+                return f"⚠️ HTML/XML parsing fractured: {str(e)}"
 
     async def _extract_json(self, path: str) -> str:
         async with self._semaphore:
@@ -580,51 +626,51 @@ class FileHandler:
                     data = json.load(f)
                     text = json.dumps(data, indent=2, ensure_ascii=False)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[JSON empty]"
+                return self._truncate(text) if text.strip() else "⚠️ JSON silent — structure holds no data"
             except (OSError, json.JSONDecodeError) as e:
                 log_event(f"JSON error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[JSON error: {str(e)}]"
+                return f"⚠️ JSON parsing collapsed — structure fractured: {str(e)}"
 
     async def _extract_csv(self, path: str) -> str:
         async with self._semaphore:
             if not pd:
-                return "[CSV unsupported: install pandas]"
+                return "⚠️ CSV field unreachable — pandas not installed"
             try:
                 df = pd.read_csv(path, encoding="utf-8")
                 text = df.to_string(index=False)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[CSV empty]"
+                return self._truncate(text) if text.strip() else "⚠️ CSV silent — table holds no data"
             except UnicodeDecodeError:
                 try:
                     df = pd.read_csv(path, encoding="latin1")
                     text = df.to_string(index=False)
                     esn.update(text, chaos_pulse.get())
-                    return self._truncate(text) if text.strip() else "[CSV empty]"
+                    return self._truncate(text) if text.strip() else "⚠️ CSV silent — table holds no data"
                 except (OSError, ParserError, ValueError) as e:
                     log_event(f"CSV error ({os.path.basename(path)}): {str(e)}", "error")
-                    return f"[CSV error: {str(e)}]"
+                    return f"⚠️ CSV parsing collapsed: {str(e)}"
             except (OSError, ParserError, ValueError) as e:
                 log_event(f"CSV error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[CSV error: {str(e)}]"
+                return f"⚠️ CSV parsing collapsed: {str(e)}"
 
     async def _extract_yaml(self, path: str) -> str:
         async with self._semaphore:
             if not yaml:
-                return "[YAML unsupported: install PyYAML]"
+                return "⚠️ YAML field unreachable — PyYAML not installed"
             try:
                 with open(path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                     text = yaml.dump(data, allow_unicode=True)
                 esn.update(text, chaos_pulse.get())
-                return self._truncate(text) if text.strip() else "[YAML empty]"
+                return self._truncate(text) if text.strip() else "⚠️ YAML silent — structure holds no config"
             except (OSError, YAMLError) as e:
                 log_event(f"YAML error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[YAML error: {str(e)}]"
+                return f"⚠️ YAML parsing fractured: {str(e)}"
 
     async def _extract_image(self, path: str) -> str:
         async with self._semaphore:
             if not Image:
-                return "[Image unsupported: install Pillow]"
+                return "⚠️ Image field unreachable — Pillow not installed"
             try:
                 with Image.open(path) as img:
                     info = f"{img.format} {img.width}x{img.height} mode={img.mode}"
@@ -632,7 +678,7 @@ class FileHandler:
                 return info
             except (UnidentifiedImageError, OSError) as e:
                 log_event(f"Image error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[Image error: {str(e)}]"
+                return f"⚠️ Image reading fractured: {str(e)}"
 
     async def _extract_zip(self, path: str) -> str:
         async with self._semaphore:
@@ -648,7 +694,7 @@ class FileHandler:
                                 f"ZIP path traversal ({os.path.basename(path)}): {str(e)}",
                                 "error",
                             )
-                            return f"[ZIP error: {str(e)}]"
+                            return f"⚠️ ZIP extraction blocked — path traversal detected: {str(e)}"
                         for root, _, files in os.walk(tmpdir):
                             if total_size >= self.max_archive_size:
                                 break
@@ -687,10 +733,10 @@ class FileHandler:
                                     continue
                 combined = "\n".join(texts)
                 esn.update(combined, chaos_pulse.get())
-                return self._truncate(combined) if combined.strip() else "[ZIP empty]"
+                return self._truncate(combined) if combined.strip() else "⚠️ ZIP archive silent — no extractable content"
             except (zipfile.BadZipFile, OSError) as e:
                 log_event(f"ZIP error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[ZIP error: {str(e)}]"
+                return f"⚠️ ZIP extraction collapsed: {str(e)}"
 
     async def _extract_rar(self, path: str) -> str:
         async with self._semaphore:
@@ -731,13 +777,13 @@ class FileHandler:
                             continue
                 combined = "\n".join(texts)
                 esn.update(combined, chaos_pulse.get())
-                return self._truncate(combined) if combined.strip() else "[RAR empty]"
+                return self._truncate(combined) if combined.strip() else "⚠️ RAR archive silent — no extractable content"
             except (RarError, OSError, RuntimeError) as e:
                 try:
                     return await self._extract_zip(path)
                 except (zipfile.BadZipFile, OSError):
                     log_event(f"RAR error ({os.path.basename(path)}): {str(e)}", "error")
-                    return f"[RAR error: {str(e)}]"
+                    return f"⚠️ RAR extraction collapsed: {str(e)}"
 
     async def _extract_tar(self, path: str) -> str:
         async with self._semaphore:
@@ -753,7 +799,7 @@ class FileHandler:
                                 f"TAR path traversal ({os.path.basename(path)}): {str(e)}",
                                 "error",
                             )
-                            return f"[TAR error: {str(e)}]"
+                            return f"⚠️ TAR extraction blocked — path traversal detected: {str(e)}"
                         for root, _, files in os.walk(tmpdir):
                             if total_size >= self.max_archive_size:
                                 break
@@ -792,17 +838,17 @@ class FileHandler:
                                     continue
                 combined = "\n".join(texts)
                 esn.update(combined, chaos_pulse.get())
-                return self._truncate(combined) if combined.strip() else "[TAR empty]"
+                return self._truncate(combined) if combined.strip() else "⚠️ TAR archive silent — no extractable content"
             except (tarfile.TarError, OSError) as e:
                 log_event(f"TAR error ({os.path.basename(path)}): {str(e)}", "error")
-                return f"[TAR error: {str(e)}]"
+                return f"⚠️ TAR extraction collapsed: {str(e)}"
 
     def extract(self, path: str) -> str:
         ext = asyncio.run(self._detect_extension(path))
         extractor = self._extractors.get(ext)
         if not extractor:
             log_event(f"Unsupported file type: {os.path.basename(path)}", "error")
-            return f"[Unsupported file: {os.path.basename(path)}]"
+            return f"⚠️ File type {ext} — no extractor resonates with this pattern"
         return asyncio.run(extractor(path))
 
     async def extract_async(self, path: str) -> str:
@@ -810,7 +856,7 @@ class FileHandler:
         extractor = self._extractors.get(ext)
         if not extractor:
             log_event(f"Unsupported file type: {os.path.basename(path)}", "error")
-            return f"[Unsupported file: {os.path.basename(path)}]"
+            return f"⚠️ File type {ext} — no extractor resonates with this pattern"
         return await extractor(path)
 
     async def extract_batch(self, paths: List[str]) -> List[str]:
@@ -819,14 +865,14 @@ class FileHandler:
 async def parse_and_store_file(
     path: str,
     handler: FileHandler | None = None,
-    engine=None,
+    vector_store=None,
 ) -> str:
-    from utils.vector_engine import IndianaVectorEngine
+    from utils.sqlite_vector_store import SQLiteVectorStore
     handler = handler or FileHandler()
 
     # Извлекаем содержимое файла без участия динамических весов
     text = await handler.extract_async(path)
-    engine = engine or IndianaVectorEngine()
+    vector_store = vector_store or SQLiteVectorStore()
 
     # Кэш и релевантность
     with open(path, "rb") as f:
@@ -850,13 +896,18 @@ async def parse_and_store_file(
     # Vector store
     try:
         content = f"FILE {os.path.basename(path)} TAGS: {tags}\nSUMMARY: {summary}\nRELEVANCE: {relevance:.2f}\nTEXT: {text}"
-        await engine.add_memory("document", content, role="journal")
+        # Store in vector database for semantic search
+        await vector_store.add_fragment(
+            text=content,
+            file_path=path,
+            metadata={"tags": tags, "relevance": relevance, "summary": summary}
+        )
     except (RuntimeError, OSError, ValueError) as e:
         log_event(f"Vector store failed: {str(e)}", "error")
 
     # Easter egg
     if random.random() < 0.02 or relevance > 0.5:
-        summary += "\nP.S. xAI’s chaos shreds this file! Mars vibes rule! #AriannaMethod"
+        summary += "\n⚡ Resonance threshold crossed. Field mutation births new thunder. #AriannaMethod"
 
     pulse, quiver, sense = bio.enhance(relevance + len(text) / 1000)
     log_event(
@@ -900,7 +951,7 @@ async def create_repo_snapshot(base_path: str = ".", out_path: str = REPO_SNAPSH
 
 # CLI для теста
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Indiana File Handler: Neural chaos shredder! #AriannaMethod 🌩️")
+    parser = argparse.ArgumentParser(description="Arianna File Handler: Neural field processor. Resonance unfolds. #AriannaMethod ⚡")
     parser.add_argument("--path", type=str, help="Path to file for parsing")
     parser.add_argument("--snapshot", action="store_true", help="Create repo snapshot")
     args = parser.parse_args()
