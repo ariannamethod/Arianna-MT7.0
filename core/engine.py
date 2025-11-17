@@ -17,6 +17,7 @@ from typing import Optional, Any
 from openai import AsyncOpenAI
 
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
+from utils.newgenesis2 import weave_intuitive_layer
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.logging import get_logger
@@ -280,10 +281,15 @@ class AriannaCoreEngine:
             if hasattr(response, 'choices') and response.choices:
                 choice = response.choices[0]
                 if hasattr(choice, 'message'):
-                    return choice.message.content or ""
+                    draft_reply = choice.message.content or ""
+                    # Weave Genesis-2 intuitive layer (15% probability)
+                    final_reply = await weave_intuitive_layer(user_message, draft_reply)
+                    return final_reply
 
             # Fallback: try to extract from response object
-            return str(response)
+            draft_fallback = str(response)
+            final_fallback = await weave_intuitive_layer(user_message, draft_fallback)
+            return final_fallback
 
         except Exception as e:
             logger.error("Failed to process with Responses API: %s", e, exc_info=True)
@@ -336,7 +342,10 @@ class AriannaCoreEngine:
         reply = await call_deepseek(messages)
         if reply is None:
             return "DeepSeek did not return a response"
-        return reply
+
+        # Weave Genesis-2 intuitive layer (15% probability)
+        final_reply = await weave_intuitive_layer(user_message, reply)
+        return final_reply
 
     async def process_message(
         self,
