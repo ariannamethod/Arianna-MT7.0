@@ -6,6 +6,7 @@ import json
 from openai import AsyncOpenAI
 
 from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
+from utils.newgenesis2 import weave_intuitive_layer
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.thread_store import load_threads, save_threads
@@ -557,12 +558,15 @@ class AriannaEngine:
                                 parts.append("\n".join(fragments))
                 answer = "\n".join(p for p in parts if p)
 
+            # Weave Genesis-2 intuitive layer (15% probability)
+            final_answer = await weave_intuitive_layer(prompt, answer)
+
             log_event({
                 "thread_key": thread_key,
                 "prompt": prompt,
-                "reply": answer,
+                "reply": final_answer,
             })
-            return answer
+            return final_answer
 
     async def deepseek_reply(
         self,
@@ -586,5 +590,8 @@ class AriannaEngine:
         reply = await call_deepseek(messages)
         if reply is None:
             return "DeepSeek did not return a response"
-        return reply
+
+        # Weave Genesis-2 intuitive layer (15% probability)
+        final_reply = await weave_intuitive_layer(prompt, reply)
+        return final_reply
 
