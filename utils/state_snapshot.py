@@ -1,14 +1,22 @@
+"""
+State Snapshotter - SQLite-based daily state collection
+
+Collects daily snapshots of memory, logs, and resources.
+Stores embeddings in SQLite instead of Pinecone.
+"""
+
 import asyncio
 import datetime
 import json
 import math
 import os
+import sqlite3
+import threading
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI
-from pinecone import Pinecone
 try:  # pragma: no cover - optional dependency
     from scipy.stats import entropy as scipy_entropy  # type: ignore
 except Exception:  # pragma: no cover - no scipy installed
@@ -17,62 +25,78 @@ except Exception:  # pragma: no cover - no scipy installed
 from utils.atomic_json import atomic_json_dump
 from utils.logging import get_logger
 from utils.memory import add_event
-from utils.vector_store import EMBED_DIM, safe_embed
 
 logger = get_logger(__name__)
 
+EMBED_DIM = 1536  # OpenAI ada-002
+_thread_local = threading.local()
+
 
 class StateSnapshotter:
-    """Collect daily state, embed it and store in Pinecone and local JSON."""
+    """
+    Collect daily state, embed it and store in SQLite and local JSON.
+
+    Migrated from Pinecone to SQLite for local storage.
+    """
 
     def __init__(
         self,
         *,
         chronicle_path: Optional[str] = None,
         local_store: str = "data/state_vectors.json",
+        sqlite_db: str = "data/state_snapshots.db",
         openai_client: Optional[AsyncOpenAI] = None,
         openai_api_key: Optional[str] = None,
-        pinecone_api_key: Optional[str] = None,
-        pinecone_index: Optional[str] = None,
-        client_cls: Any = Pinecone,
     ) -> None:
         self.chronicle_path = (
             chronicle_path
             or os.getenv("CHRONICLE_PATH", "config/chronicle.log")
         )
         self.local_store = Path(local_store)
+        self.sqlite_db = Path(sqlite_db)
         self.openai_client = openai_client or AsyncOpenAI(
             api_key=openai_api_key or os.getenv("OPENAI_API_KEY")
         )
-        self._pinecone_api_key = pinecone_api_key or os.getenv("PINECONE_API_KEY")
-        self._pinecone_index = pinecone_index or os.getenv("PINECONE_INDEX")
-        self._client_cls = client_cls
-        self._pc: Optional[Pinecone] = None
-        self._index = None
 
-    # ------------------------------------------------------------------
-    # Pinecone helpers
-    # ------------------------------------------------------------------
-    def _init_pinecone(self) -> None:
-        if self._index is not None:
-            return
-        if not self._pinecone_api_key or not self._pinecone_index:
-            return
+        # Initialize SQLite for snapshots
+        self._init_db()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get thread-local SQLite connection."""
+        if not hasattr(_thread_local, 'conn') or _thread_local.conn is None:
+            self.sqlite_db.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(self.sqlite_db), check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            _thread_local.conn = conn
+            logger.debug("Created new SQLite connection for snapshots")
+        return _thread_local.conn
+
+    def _init_db(self) -> None:
+        """Initialize SQLite database for state snapshots."""
+        conn = self._get_connection()
         try:
-            self._pc = self._client_cls(api_key=self._pinecone_api_key)
-            indexes = self._pc.list_indexes()
-            names = [x["name"] for x in indexes]
-            if self._pinecone_index not in names:
-                self._pc.create_index(
-                    name=self._pinecone_index,
-                    dimension=EMBED_DIM,
-                    metric="cosine",
-                )
-            self._index = self._pc.Index(self._pinecone_index)
-        except Exception as e:  # pragma: no cover - logging only
-            logger.warning("Pinecone init failed: %s", e)
-            self._pc = None
-            self._index = None
+            conn.executescript("""
+                -- State snapshots table
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id TEXT PRIMARY KEY,
+                    block TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    entropy REAL,
+                    perplexity REAL,
+                    embedding BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- Index for querying by block and timestamp
+                CREATE INDEX IF NOT EXISTS idx_snapshots_block_ts
+                ON snapshots(block, timestamp);
+            """)
+            conn.commit()
+            logger.debug("State snapshots database initialized")
+        except Exception as e:
+            logger.error("Failed to initialize snapshots database: %s", e, exc_info=True)
+            raise
 
     # ------------------------------------------------------------------
     # State collection
@@ -129,6 +153,7 @@ class StateSnapshotter:
         return []
 
     def _save_local(self, data: List[Dict[str, Any]]) -> None:
+        self.local_store.parent.mkdir(parents=True, exist_ok=True)
         atomic_json_dump(str(self.local_store), data)
 
     # ------------------------------------------------------------------
@@ -146,39 +171,67 @@ class StateSnapshotter:
         if not text.strip():
             return [0.0] * EMBED_DIM
         try:
-            return await safe_embed(text, self.openai_client)
+            res = await self.openai_client.embeddings.create(
+                model="text-embedding-ada-002",
+                input=text,
+            )
+            return res.data[0].embedding
         except Exception as e:  # pragma: no cover - logging only
             logger.warning("Embedding failed: %s", e)
             return [0.0] * EMBED_DIM
+
+    def _store_snapshot_sqlite(
+        self,
+        snapshot_id: str,
+        block: str,
+        timestamp: str,
+        embedding: List[float],
+        entropy: float,
+        perplexity: float
+    ) -> None:
+        """Store snapshot in SQLite."""
+        conn = self._get_connection()
+        try:
+            # Convert embedding to bytes
+            import array
+            emb_array = array.array('f', embedding)
+            emb_bytes = emb_array.tobytes()
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO snapshots
+                (id, block, timestamp, entropy, perplexity, embedding)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (snapshot_id, block, timestamp, entropy, perplexity, emb_bytes)
+            )
+            conn.commit()
+        except Exception as e:
+            logger.error("Failed to store snapshot in SQLite: %s", e, exc_info=True)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     async def run_once(self) -> None:
+        """Run a single snapshot collection cycle."""
         state = self.collect_state()
         timestamp = datetime.datetime.now().isoformat()
-        self._init_pinecone()
         local_data = self._load_local()
+
         for block, data in state.items():
             text = data.get("text", "")
             ent = data.get("entropy", 0.0)
             pp = data.get("perplexity", 0.0)
             emb = await self._embed_text(text)
             snapshot_id = f"{timestamp}:{block}"
-            meta = {
-                "block": block,
-                "timestamp": timestamp,
-                "entropy": ent,
-                "perplexity": pp,
-            }
-            if self._index is not None:
-                try:
-                    await asyncio.to_thread(
-                        self._index.upsert,
-                        vectors=[{"id": snapshot_id, "values": emb, "metadata": meta}],
-                    )
-                except Exception as e:  # pragma: no cover - logging only
-                    logger.warning("Pinecone upsert failed: %s", e)
+
+            # Store in SQLite
+            await asyncio.to_thread(
+                self._store_snapshot_sqlite,
+                snapshot_id, block, timestamp, emb, ent, pp
+            )
+
+            # Calculate similarity to previous snapshot
             prev = next(
                 (e for e in reversed(local_data) if e.get("block") == block),
                 None,
@@ -191,8 +244,11 @@ class StateSnapshotter:
             else:
                 sim = 0.0
                 logger.info("Snapshot %s recorded", block)
+
             summary = f"{block} similarity={sim:.2f} perplexity={pp:.2f}"
             add_event("snapshot_summary", summary, tags=["snapshot"])
+
+            # Add to local data
             local_data.append(
                 {
                     "id": snapshot_id,
@@ -203,9 +259,11 @@ class StateSnapshotter:
                     "perplexity": pp,
                 }
             )
+
         self._save_local(local_data)
 
     async def run(self) -> None:
+        """Run snapshot collection loop (once per day)."""
         while True:
             try:
                 await self.run_once()
@@ -213,6 +271,8 @@ class StateSnapshotter:
                 raise
             except Exception:  # pragma: no cover - logging only
                 logger.exception("State snapshot run failed")
+
+            # Sleep until next day
             now = datetime.datetime.now()
             next_day = (now + datetime.timedelta(days=1)).replace(
                 hour=0, minute=0, second=0, microsecond=0
