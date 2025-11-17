@@ -193,9 +193,16 @@ async def check_repository_changes(
 
     if force_reindex:
         logger.info("Force reindex requested")
-        save_hashes(current_hashes)
         if vector_store:
-            await vector_store.vectorize_all_files(force=True)
+            try:
+                await vector_store.vectorize_all_files(force=True)
+                # Only save hashes after successful reindexing
+                save_hashes(current_hashes)
+            except Exception as e:
+                logger.error("Force reindex failed: %s", e, exc_info=True)
+                raise
+        else:
+            save_hashes(current_hashes)
         return True
 
     # Сохраненные хеши
@@ -204,9 +211,16 @@ async def check_repository_changes(
     # Первый запуск - нет сохраненных хешей
     if not saved_hashes:
         logger.info("First run - creating initial snapshot")
-        save_hashes(current_hashes)
         if vector_store:
-            await vector_store.vectorize_all_files(force=True)
+            try:
+                await vector_store.vectorize_all_files(force=True)
+                # Only save hashes after successful reindexing
+                save_hashes(current_hashes)
+            except Exception as e:
+                logger.error("Initial indexing failed: %s", e, exc_info=True)
+                raise
+        else:
+            save_hashes(current_hashes)
         return True
 
     # Определяем изменения
@@ -224,13 +238,19 @@ async def check_repository_changes(
     if deleted:
         logger.info("Deleted files: %s", ", ".join(deleted))
 
-    # Сохраняем новые хеши
-    save_hashes(current_hashes)
-
     # Триггерим переиндексацию
     if vector_store:
         logger.info("Triggering vector store reindexing...")
-        await vector_store.vectorize_all_files(force=True)
+        try:
+            await vector_store.vectorize_all_files(force=True)
+            # Only save hashes after successful reindexing
+            save_hashes(current_hashes)
+        except Exception as e:
+            logger.error("Reindexing failed: %s", e, exc_info=True)
+            raise
+    else:
+        # No vector store - just save hashes
+        save_hashes(current_hashes)
 
     return True
 
