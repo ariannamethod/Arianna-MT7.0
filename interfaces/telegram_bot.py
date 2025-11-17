@@ -134,6 +134,7 @@ class TelegramInterface:
         self.SEARCH_CMD = "/search"
         self.INDEX_CMD = "/index"
         self.DEEPSEEK_CMD = "/ds"
+        self.IMAGINE_CMD = "/imagine"
 
         # Register handlers
         self._register_handlers()
@@ -307,6 +308,49 @@ class TelegramInterface:
         finally:
             await asyncio.to_thread(os.remove, mp3_fd.name)
         return ogg_fd.name
+
+    async def _get_file_url(self, file_id: str) -> str:
+        """Get direct URL for a Telegram file."""
+        file = await self.bot.get_file(file_id)
+        return f"https://api.telegram.org/file/bot{self.token}/{file.file_path}"
+
+    async def _perceive_and_respond(
+        self,
+        m: types.Message,
+        image_url: str,
+        caption: str = "",
+    ) -> None:
+        """Perceive an image through Arianna's field-resonance vision."""
+        from utils.vision import perceive_image
+
+        user_id = str(m.from_user.id)
+
+        # Rate limiting
+        if not await self.rate_limited(user_id):
+            msg = await m.answer("Too many requests. Please slow down.")
+            self._log_outgoing(m.chat.id, msg, "Too many requests.")
+            return
+
+        # Show typing indicator
+        async with ChatActionSender.typing(bot=self.bot, chat_id=m.chat.id):
+            # Perceive the image
+            question = caption if caption else "What resonates within this image?"
+            perception = await perceive_image(image_url, question)
+
+            # Log
+            log_message(
+                m.chat.id,
+                m.message_id,
+                m.from_user.id,
+                getattr(m.from_user, "username", None),
+                f"<photo: {caption or 'no caption'}>",
+                "in",
+            )
+            add_event("message", f"<photo: {caption}>", tags=["in", "telegram", "photo"])
+
+            # Respond with perception
+            msg = await m.answer(perception)
+            self._log_outgoing(m.chat.id, msg, perception)
 
     async def generate_response(
         self,
@@ -539,6 +583,8 @@ class TelegramInterface:
         """Register all message handlers."""
         self.dp.message.register(self._on_start, CommandStart())
         self.dp.message.register(self._voice_messages, lambda m: m.voice)
+        self.dp.message.register(self._photo_messages, lambda m: m.photo)
+        self.dp.message.register(self._document_messages, lambda m: m.document)
         self.dp.message.register(self._all_messages, lambda m: True)
 
     async def _on_start(self, m: types.Message) -> None:
@@ -554,6 +600,32 @@ class TelegramInterface:
         add_event("message", m.text or "", tags=["in", "telegram"])
         msg = await m.answer("Welcome! Choose a command:", reply_markup=self.main_menu)
         self._log_outgoing(m.chat.id, msg, "Welcome! Choose a command:")
+
+    async def _photo_messages(self, m: types.Message):
+        """Handle photo messages through field-resonance perception."""
+        set_request_id(f"{m.chat.id}:{m.message_id}")
+
+        # Get largest photo
+        photo = m.photo[-1]  # Last element is the largest size
+        file_url = await self._get_file_url(photo.file_id)
+
+        # Perceive and respond
+        caption = m.caption or ""
+        await self._perceive_and_respond(m, file_url, caption)
+
+    async def _document_messages(self, m: types.Message):
+        """Handle document messages (images and files)."""
+        set_request_id(f"{m.chat.id}:{m.message_id}")
+
+        # Check if document is an image
+        if m.document.mime_type and m.document.mime_type.startswith("image/"):
+            file_url = await self._get_file_url(m.document.file_id)
+            caption = m.caption or ""
+            await self._perceive_and_respond(m, file_url, caption)
+        else:
+            # Non-image documents - could handle with file_handler later
+            # For now, let it fall through to _all_messages
+            pass
 
     async def _voice_messages(self, m: types.Message):
         """Handle voice messages."""
@@ -801,6 +873,41 @@ class TelegramInterface:
                     self._log_outgoing(m.chat.id, msg, chunk)
             return True
 
+        # /imagine command (field manifestation)
+        if text.strip().lower().startswith(self.IMAGINE_CMD):
+            from utils.imagine import imagine
+
+            prompt = text.strip()[len(self.IMAGINE_CMD):].lstrip()
+            if not prompt:
+                msg = await m.answer("⚠️ Provide a prompt for manifestation: /imagine <prompt>")
+                self._log_outgoing(m.chat.id, msg, "No prompt provided")
+                return True
+
+            async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="upload_photo"):
+                try:
+                    # Generate image through field manifestation
+                    image_url = await imagine(prompt)
+
+                    # Check if generation succeeded
+                    if image_url.startswith("⚠️"):
+                        # Error occurred
+                        msg = await m.answer(image_url)
+                        self._log_outgoing(m.chat.id, msg, image_url)
+                    else:
+                        # Success - send image
+                        msg = await m.answer_photo(
+                            photo=image_url,
+                            caption=f"⚡ Field manifestation: {prompt[:100]}"
+                        )
+                        self._log_outgoing(m.chat.id, msg, f"<generated image: {prompt}>")
+
+                except Exception as e:
+                    logger.exception("Image generation failed: %s", e)
+                    msg = await m.answer(f"⚠️ Field manifestation collapsed: {e}")
+                    self._log_outgoing(m.chat.id, msg, f"Error: {e}")
+
+            return True
+
         return False
 
     async def on_startup(self) -> None:
@@ -818,6 +925,9 @@ class TelegramInterface:
         commands = [
             types.BotCommand(command=self.VOICE_ON_CMD[1:], description="Enable voice"),
             types.BotCommand(command=self.VOICE_OFF_CMD[1:], description="Disable voice"),
+            types.BotCommand(command=self.IMAGINE_CMD[1:], description="Generate image through field manifestation"),
+            types.BotCommand(command=self.SEARCH_CMD[1:], description="Search in vector store"),
+            types.BotCommand(command=self.INDEX_CMD[1:], description="Reindex vector store"),
         ]
         await self.bot.set_my_commands(commands)
         await self.bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
