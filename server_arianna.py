@@ -18,6 +18,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from interfaces.telegram_bot import TelegramInterface
 from utils.tasks import create_task, cancel_tracked
 from utils.snapshot_service import run_snapshot_service
+from utils.repo_monitor import check_repository_changes
 from utils.logging import get_logger
 
 
@@ -55,6 +56,13 @@ async def main():
 
     # Initialize interface (setup bot commands, get bot info, etc.)
     await interface.on_startup()
+
+    # Check repository for config changes and reindex if needed
+    logger.info("Checking repository for config changes...")
+    try:
+        await check_repository_changes(vector_store=interface.vector_store)
+    except Exception as e:
+        logger.error("Repository check failed: %s", e, exc_info=True)
 
     # Setup legacy assistant if needed
     init_failed = False

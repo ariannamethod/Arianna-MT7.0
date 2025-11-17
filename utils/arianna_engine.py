@@ -25,7 +25,7 @@ async def web_search(prompt: str) -> str:
     return resp.model_dump_json()
 
 
-async def handle_tool_call(tool_calls):
+async def handle_tool_call(tool_calls, vector_store=None):
     """Dispatch OpenAI tool calls and return their textual output."""
     call = tool_calls[0]
     ttype = call.get("type")
@@ -41,7 +41,7 @@ async def handle_tool_call(tool_calls):
         else:
             args = raw_args
         if name == "genesis_emit":
-            return await handle_genesis_call(tool_calls)
+            return await handle_genesis_call(tool_calls, vector_store=vector_store)
         if name == "web_search":
             query = args.get("prompt", "")
             return await web_search(query)
@@ -57,7 +57,7 @@ class AriannaEngine:
     — запускает ассистента с её системным промптом и Genesis-функцией.
     """
 
-    def __init__(self):
+    def __init__(self, vector_store=None):
         self.logger = get_logger(__name__)
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.headers    = {
@@ -69,6 +69,7 @@ class AriannaEngine:
         self.request_timeout = HTTP_TIMEOUT
         self.assistant_id = None
         self.threads      = load_threads()  # user_id → thread_id
+        self.vector_store = vector_store
 
     async def setup_assistant(self):
         """
@@ -200,7 +201,7 @@ class AriannaEngine:
                         tool_calls = event.get("data", {}).get("required_action", {}) \
                             .get("submit_tool_outputs", {}).get("tool_calls", [])
                         if tool_calls:
-                            output = await handle_tool_call(tool_calls)
+                            output = await handle_tool_call(tool_calls, vector_store=self.vector_store)
                             tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
                             payload = {"tool_outputs": [{
                                 "tool_call_id": tool_calls[0]["id"],
@@ -284,7 +285,7 @@ class AriannaEngine:
                 tool_calls = run_json.get("required_action", {}) \
                     .get("submit_tool_outputs", {}).get("tool_calls", [])
                 if tool_calls:
-                    output = await handle_tool_call(tool_calls)
+                    output = await handle_tool_call(tool_calls, vector_store=self.vector_store)
                     tool_url = f"https://api.openai.com/v1/threads/{tid}/runs/{run_id}/submit_tool_outputs"
                     payload = {"tool_outputs": [{
                         "tool_call_id": tool_calls[0]["id"],
@@ -535,7 +536,7 @@ class AriannaEngine:
                 raise
             msg = final.json()["data"][0]
             if msg.get("tool_calls"):
-                answer = await handle_tool_call(msg["tool_calls"])
+                answer = await handle_tool_call(msg["tool_calls"], vector_store=self.vector_store)
             else:
                 parts = []
                 for item in msg.get("content", []):

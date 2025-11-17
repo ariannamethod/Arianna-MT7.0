@@ -51,7 +51,7 @@ async def web_search(prompt: str, client: AsyncOpenAI) -> str:
     return resp.model_dump_json()
 
 
-async def handle_tool_call(tool_calls, client: Optional[AsyncOpenAI] = None):
+async def handle_tool_call(tool_calls, client: Optional[AsyncOpenAI] = None, vector_store: Optional[Any] = None):
     """
     Dispatch OpenAI tool calls and return their textual output.
 
@@ -61,6 +61,8 @@ async def handle_tool_call(tool_calls, client: Optional[AsyncOpenAI] = None):
         Tool calls to handle
     client : Optional[AsyncOpenAI]
         OpenAI client for web_search (if None, creates one)
+    vector_store : Optional[Any]
+        Vector store for Genesis tool semantic search
 
     Returns
     -------
@@ -81,7 +83,7 @@ async def handle_tool_call(tool_calls, client: Optional[AsyncOpenAI] = None):
         else:
             args = raw_args
         if name == "genesis_emit":
-            return await handle_genesis_call(tool_calls)
+            return await handle_genesis_call(tool_calls, vector_store=vector_store)
         if name == "web_search":
             query = args.get("prompt", "")
             if client is None:
@@ -271,7 +273,7 @@ class AriannaCoreEngine:
             # Extract response text
             # Handle tool calls if present
             if hasattr(response, 'tool_calls') and response.tool_calls:
-                tool_output = await handle_tool_call(response.tool_calls, self.openai_client)
+                tool_output = await handle_tool_call(response.tool_calls, self.openai_client, self.vector_store)
                 return tool_output
 
             # Extract text content
