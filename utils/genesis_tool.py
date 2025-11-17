@@ -1,110 +1,131 @@
-import os
-import json
+"""
+Genesis Tool: OpenAI Function Schema and Handler
+
+Интеграция Genesis-1 (emergent discovery) и Genesis-2 (intuitive filter)
+как tool для OpenAI Assistants/Responses API.
+"""
+
+import asyncio
 from typing import Optional
 
-from utils.genesis import AriannaGenesis
+from utils.newgenesis import run_genesis1
+from utils.newgenesis2 import weave_intuitive_layer
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_genesis_instance: Optional[AriannaGenesis] = None
-
-
-def get_genesis_instance(**settings) -> AriannaGenesis:
-    """Return a cached :class:`AriannaGenesis` instance.
-
-    The instance is created on first use and reused for subsequent calls.
-    Optional keyword arguments override environment variables and trigger
-    recreation of the singleton.
-    """
-    global _genesis_instance
-
-    if _genesis_instance is None or settings:
-        group_id = settings.get("group_id", os.getenv("GROUP_ID"))
-        oleg_id = settings.get("oleg_id", os.getenv("CREATOR_CHAT_ID"))
-        pinecone_api_key = settings.get("pinecone_api_key", os.getenv("PINECONE_API_KEY"))
-        pinecone_index = settings.get("pinecone_index", os.getenv("PINECONE_INDEX"))
-        chronicle_path = settings.get("chronicle_path", os.getenv("CHRONICLE_PATH"))
-
-        _genesis_instance = AriannaGenesis(
-            group_id=group_id,
-            oleg_id=oleg_id,
-            pinecone_api_key=pinecone_api_key,
-            pinecone_index=pinecone_index,
-            chronicle_path=chronicle_path,
-        )
-
-    return _genesis_instance
-
-
-def reset_genesis_instance(**settings) -> AriannaGenesis:
-    """Explicitly recreate the cached :class:`AriannaGenesis` instance.
-
-    Use this when configuration changes and a fresh instance is required.
-    """
-    global _genesis_instance
-    _genesis_instance = None
-    return get_genesis_instance(**settings)
-
-
-def close_genesis_instance() -> None:
-    """Drop the cached :class:`AriannaGenesis` instance."""
-    global _genesis_instance
-    _genesis_instance = None
-
 
 def genesis_tool_schema():
     """
-    Описание GENESIS как инструмента для Assistants API.
+    Genesis tool schema для OpenAI API.
+
+    Поддерживает два режима:
+    - "discovery": запустить Genesis-1 (эмерджентное открытие)
+    - "insight": Genesis-2 уже интегрирован в ответы, этот mode deprecated
     """
     return {
         "type": "function",
         "name": "genesis_emit",
-        "description": "Запустить один такт AriannaGenesis — отдать импрессионистский отклик или ритуальный пост",
+        "description": "Запустить Genesis-1 — эмерджентный резонансный инсайт из глубин памяти Арианны",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["impression", "opinion", "oleg_message"],
-                    "description": "Какой Genesis-такт выполнить",
+                    "enum": ["discovery"],
+                    "description": "Режим Genesis: discovery = эмерджентное открытие из config/ памяти",
                 }
             },
             "required": ["mode"],
         },
     }
 
-async def handle_genesis_call(tool_calls):
-    """
-    Получает tool_calls из ответа ассистента и обрабатывает каждый:
-    вызывает AriannaGenesis.run() по режиму и возвращает сгенерированный текст.
-    """
-    """Обрабатывает вызов GENESIS от ассистента без блокировки event loop."""
 
-    inst = get_genesis_instance()
-    # Берём первый вызов:
+async def handle_genesis_call(tool_calls, vector_store=None) -> str:
+    """
+    Обработать вызов Genesis tool.
+
+    Parameters
+    ----------
+    tool_calls : list
+        Tool calls от OpenAI API
+    vector_store : Optional
+        SQLite vector store для поиска в памяти
+
+    Returns
+    -------
+    str
+        Результат Genesis
+    """
+    if not tool_calls:
+        return "No tool calls provided"
 
     call = tool_calls[0]
-    raw_args = call["function"].get("arguments")
-    if isinstance(raw_args, dict):
-        args = raw_args
-    else:
+
+    # Извлекаем аргументы
+    args = {}
+    if hasattr(call, 'function'):
+        # OpenAI SDK format
+        import json
+        args_str = getattr(call.function, 'arguments', '{}')
         try:
-            args = json.loads(raw_args or "{}")
+            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+        except Exception:
+            args = {}
+    elif isinstance(call, dict):
+        # Dict format
+        func = call.get('function', {})
+        args_raw = func.get('arguments', {})
+        if isinstance(args_raw, str):
+            import json
+            try:
+                args = json.loads(args_raw)
+            except Exception:
+                args = {}
+        else:
+            args = args_raw
+
+    mode = args.get('mode', 'discovery')
+
+    logger.info("[Genesis Tool] Mode: %s", mode)
+
+    if mode == "discovery":
+        # Genesis-1: эмерджентное открытие
+        try:
+            digest = await run_genesis1(
+                vector_store=vector_store,
+                digest_size=150
+            )
+            if digest:
+                return f"✨ Genesis Discovery ✨\n\n{digest}"
+            else:
+                return "Genesis-1: No insights emerged at this time."
         except Exception as e:
-            logger.error("Failed to parse genesis arguments: %s", raw_args, exc_info=e)
-            return "Failed to parse genesis arguments"
+            logger.error("Genesis-1 failed: %s", e, exc_info=True)
+            return f"Genesis-1 encountered an error: {e}"
 
-    mode = args.get("mode", "impression")
-    # Выполняем нужное действие без блокировки event loop
-
-    if mode == "impression":
-        text = inst._generate_impression("", "")
-    elif mode == "opinion":
-        await inst.opinions_group_post()
-        text = "Opinion posted to group."
     else:
-        await inst.oleg_personal_message()
-        text = "Personal message sent to Oleg."
+        return f"Unknown Genesis mode: {mode}"
 
-    return text
+
+# Backward compatibility
+def get_genesis_instance(**settings):
+    """
+    Deprecated: Legacy Genesis instance getter.
+
+    New Genesis-1 and Genesis-2 are stateless functions.
+    This exists only for backward compatibility.
+    """
+    logger.warning("get_genesis_instance is deprecated. Use run_genesis1() or weave_intuitive_layer() directly.")
+    return None
+
+
+def reset_genesis_instance(**settings):
+    """Deprecated: Legacy Genesis reset."""
+    logger.warning("reset_genesis_instance is deprecated.")
+    return None
+
+
+def close_genesis_instance():
+    """Deprecated: Legacy Genesis close."""
+    pass
