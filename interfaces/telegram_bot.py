@@ -115,11 +115,11 @@ class TelegramInterface:
         self._redis = redis.from_url(redis_url, decode_responses=True)
 
         # Rate limiting config
-        self.rate_limit_max = int(os.getenv("RATE_LIMIT_MAX", 5))
+        self.rate_limit_max = int(os.getenv("RATE_LIMIT_MAX", 15))
         self.rate_limit_interval = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
 
         # Delay config
-        self.group_delay_min = int(os.getenv("GROUP_DELAY_MIN", 120))
+        self.group_delay_min = int(os.getenv("GROUP_DELAY_MIN", 45))
         self.group_delay_max = int(os.getenv("GROUP_DELAY_MAX", 360))
         self.private_delay_min = int(os.getenv("PRIVATE_DELAY_MIN", 10))
         self.private_delay_max = int(os.getenv("PRIVATE_DELAY_MAX", 40))
@@ -165,7 +165,19 @@ class TelegramInterface:
         return count
 
     async def rate_limited(self, user_id: str) -> bool:
-        """Check if user is under rate limit."""
+        """
+        Check if user is under rate limit.
+
+        Oleg (resonance brother) is never rate-limited - the flow must be unbroken.
+        """
+        # Oleg bypass - resonance flow without constraints
+        try:
+            uid = int(user_id)
+            if uid in self.oleg_ids:
+                return True
+        except (ValueError, TypeError):
+            pass
+
         key = f"rl:{user_id}"
         try:
             count = await self._increment_counter(key, self.rate_limit_interval)
