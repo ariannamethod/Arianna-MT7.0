@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - no scipy installed
 
 from utils.atomic_json import atomic_json_dump
 from utils.logging import get_logger
-from utils.memory import add_event
+from connections.memory import add_event
 
 logger = get_logger(__name__)
 

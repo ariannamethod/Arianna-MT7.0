@@ -8,8 +8,8 @@ Genesis Tool: OpenAI Function Schema and Handler
 import asyncio
 from typing import Optional
 
-from utils.newgenesis import run_genesis1
-from utils.newgenesis2 import weave_intuitive_layer
+from connections.newgenesis import run_genesis1
+from connections.newgenesis2 import weave_intuitive_layer
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
