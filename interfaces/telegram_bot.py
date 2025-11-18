@@ -346,21 +346,23 @@ class TelegramInterface:
         delay: float,
         followup: Optional[dict] = None,
     ):
-        """Send response after delay, with optional followup."""
+        """Send response after delay, with optional followup.
+
+        Note: Caller should wrap in ChatActionSender to show typing during delay.
+        """
         await asyncio.sleep(delay)
 
-        async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-            if self.voice_enabled.get(m.chat.id):
-                voice_path = await self.synthesize_voice(response_text)
-                msg = await m.answer_voice(
-                    types.FSInputFile(voice_path), caption=response_text[:1024]
-                )
-                self._log_outgoing(m.chat.id, msg, response_text[:1024])
-                await asyncio.to_thread(os.remove, voice_path)
-            else:
-                # Send response (Telegram will handle length limits)
-                msg = await m.answer(response_text)
-                self._log_outgoing(m.chat.id, msg, response_text)
+        if self.voice_enabled.get(m.chat.id):
+            voice_path = await self.synthesize_voice(response_text)
+            msg = await m.answer_voice(
+                types.FSInputFile(voice_path), caption=response_text[:1024]
+            )
+            self._log_outgoing(m.chat.id, msg, response_text[:1024])
+            await asyncio.to_thread(os.remove, voice_path)
+        else:
+            # Send response (Telegram will handle length limits)
+            msg = await m.answer(response_text)
+            self._log_outgoing(m.chat.id, msg, response_text)
 
         # Schedule followup if requested by essence
         if followup:
@@ -492,14 +494,11 @@ class TelegramInterface:
                 )
 
                 if result:
-                    create_task(
-                        self._send_response(
-                            m,
-                            result['text'],
-                            result['delay'],
-                            result.get('followup'),
-                        ),
-                        track=True
+                    await self._send_response(
+                        m,
+                        result['text'],
+                        result['delay'],
+                        result.get('followup'),
                     )
 
         except Exception as e:
@@ -589,14 +588,11 @@ class TelegramInterface:
             )
 
             if result:
-                create_task(
-                    self._send_response(
-                        m,
-                        result['text'],
-                        result['delay'],
-                        result.get('followup'),
-                    ),
-                    track=True
+                await self._send_response(
+                    m,
+                    result['text'],
+                    result['delay'],
+                    result.get('followup'),
                 )
 
     async def _handle_commands(self, m: types.Message, text: str) -> bool:
