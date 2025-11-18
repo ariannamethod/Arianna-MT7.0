@@ -19,7 +19,7 @@ from utils.config import HTTP_TIMEOUT
 logger = get_logger(__name__)
 
 DEEPSEEK_MODEL = "deepseek-reasoner"
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 GENESIS2_PROB = 0.15  # 15% вероятность срабатывания
 
 # Символы, которыми должно заканчиваться корректное предложение
