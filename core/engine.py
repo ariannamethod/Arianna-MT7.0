@@ -45,7 +45,7 @@ async def web_search(prompt: str, client: AsyncOpenAI) -> str:
     """
     resp = await client.responses.create(
         model="gpt-4.1",
-        input=prompt,
+        messages=[{"role": "user", "content": prompt}],
         tools=[{"type": "web_search"}],
         timeout=HTTP_TIMEOUT,
     )
