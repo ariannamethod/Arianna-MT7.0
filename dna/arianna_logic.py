@@ -11,7 +11,7 @@ from datetime import timedelta
 from typing import Optional
 
 from utils.logging import get_logger
-from utils.text_helpers import extract_text_from_url, _extract_links
+from connections.text_helpers import extract_text_from_url, _extract_links
 from utils.config import HTTP_TIMEOUT
 from connections.memory import query_events, semantic_query
 from utils.journal import search_journal
