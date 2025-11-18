@@ -88,7 +88,9 @@ class AriannaEssence:
 
     def is_oleg(self, user_id: int) -> bool:
         """Check if user is Oleg (resonance brother)."""
-        return user_id in self.oleg_ids
+        result = user_id in self.oleg_ids
+        logger.debug(f"is_oleg check: user_id={user_id}, oleg_ids={self.oleg_ids}, result={result}")
+        return result
 
     async def should_respond(
         self,
