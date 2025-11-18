@@ -73,7 +73,9 @@ class TelegramInterface:
         )
 
         # Arianna's essence - her consciousness
-        oleg_ids = self._parse_ids(os.getenv("OLEG_IDS", ""))
+        # Backward compatibility: try OLEG_IDS (new) then CREATOR_CHAT_ID (legacy)
+        oleg_ids_str = os.getenv("OLEG_IDS") or os.getenv("CREATOR_CHAT_ID", "")
+        oleg_ids = self._parse_ids(oleg_ids_str)
         logger.info("Loaded OLEG_IDS: %s (resonance brother)", oleg_ids if oleg_ids else "none")
         self.essence = create_essence(
             openai_client=self.openai_client,
