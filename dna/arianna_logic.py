@@ -250,13 +250,13 @@ class AriannaLogic:
         if chunks:
             parts.append("[VectorStore]\n" + "\n".join(chunks))
 
-        # Journal search
-        journal_hits = search_journal(text)
+        # Journal search (async wrapper for blocking I/O)
+        journal_hits = await asyncio.to_thread(search_journal, text)
         if journal_hits:
             parts.append("[journal.log]\n" + "\n".join(journal_hits))
 
-        # Memory events
-        mem_events = semantic_query(text)
+        # Memory events (async wrapper for blocking SQL + embeddings)
+        mem_events = await asyncio.to_thread(semantic_query, text)
         if events:
             mem_events.extend(events)
         if mem_events:

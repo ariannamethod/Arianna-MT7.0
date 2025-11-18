@@ -216,7 +216,8 @@ class StateSnapshotter:
         """Run a single snapshot collection cycle."""
         state = self.collect_state()
         timestamp = datetime.datetime.now().isoformat()
-        local_data = self._load_local()
+        # Async wrapper for blocking json.load
+        local_data = await asyncio.to_thread(self._load_local)
 
         for block, data in state.items():
             text = data.get("text", "")
@@ -260,7 +261,8 @@ class StateSnapshotter:
                 }
             )
 
-        self._save_local(local_data)
+        # Async wrapper for blocking json.dump (via atomic_json_dump)
+        await asyncio.to_thread(self._save_local, local_data)
 
     async def run(self) -> None:
         """Run snapshot collection loop (once per day)."""

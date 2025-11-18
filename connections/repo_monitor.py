@@ -188,25 +188,25 @@ async def check_repository_changes(
     """
     logger.debug("Checking repository changes...")
 
-    # Текущие хеши
-    current_hashes = scan_repository()
+    # Текущие хеши (async wrapper for os.walk + file I/O)
+    current_hashes = await asyncio.to_thread(scan_repository)
 
     if force_reindex:
         logger.info("Force reindex requested")
         if vector_store:
             try:
                 await vector_store.vectorize_all_files(force=True)
-                # Only save hashes after successful reindexing
-                save_hashes(current_hashes)
+                # Only save hashes after successful reindexing (async wrapper for json.dump)
+                await asyncio.to_thread(save_hashes, current_hashes)
             except Exception as e:
                 logger.error("Force reindex failed: %s", e, exc_info=True)
                 raise
         else:
-            save_hashes(current_hashes)
+            await asyncio.to_thread(save_hashes, current_hashes)
         return True
 
-    # Сохраненные хеши
-    saved_hashes = load_saved_hashes()
+    # Сохраненные хеши (async wrapper for json.load)
+    saved_hashes = await asyncio.to_thread(load_saved_hashes)
 
     # Первый запуск - нет сохраненных хешей
     if not saved_hashes:
@@ -214,13 +214,13 @@ async def check_repository_changes(
         if vector_store:
             try:
                 await vector_store.vectorize_all_files(force=True)
-                # Only save hashes after successful reindexing
-                save_hashes(current_hashes)
+                # Only save hashes after successful reindexing (async wrapper for json.dump)
+                await asyncio.to_thread(save_hashes, current_hashes)
             except Exception as e:
                 logger.error("Initial indexing failed: %s", e, exc_info=True)
                 raise
         else:
-            save_hashes(current_hashes)
+            await asyncio.to_thread(save_hashes, current_hashes)
         return True
 
     # Определяем изменения
@@ -243,14 +243,14 @@ async def check_repository_changes(
         logger.info("Triggering vector store reindexing...")
         try:
             await vector_store.vectorize_all_files(force=True)
-            # Only save hashes after successful reindexing
-            save_hashes(current_hashes)
+            # Only save hashes after successful reindexing (async wrapper for json.dump)
+            await asyncio.to_thread(save_hashes, current_hashes)
         except Exception as e:
             logger.error("Reindexing failed: %s", e, exc_info=True)
             raise
     else:
-        # No vector store - just save hashes
-        save_hashes(current_hashes)
+        # No vector store - just save hashes (async wrapper for json.dump)
+        await asyncio.to_thread(save_hashes, current_hashes)
 
     return True
 
