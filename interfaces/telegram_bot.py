@@ -585,7 +585,8 @@ class TelegramInterface:
         self.dp.message.register(self._voice_messages, lambda m: m.voice)
         self.dp.message.register(self._photo_messages, lambda m: m.photo)
         self.dp.message.register(self._document_messages, lambda m: m.document)
-        self.dp.message.register(self._all_messages, lambda m: True)
+        # Only process text messages (not photo/voice/document which have m.text=None)
+        self.dp.message.register(self._all_messages, lambda m: m.text is not None)
 
     async def _on_start(self, m: types.Message) -> None:
         """Handle /start command."""
