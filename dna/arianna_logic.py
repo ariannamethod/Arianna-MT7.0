@@ -13,7 +13,6 @@ from typing import Optional
 from utils.logging import get_logger
 from utils.text_helpers import extract_text_from_url, _extract_links
 from utils.config import HTTP_TIMEOUT
-from utils.history_store import get_context as get_history_context
 from connections.memory import query_events, semantic_query
 from utils.journal import search_journal
 
@@ -290,7 +289,8 @@ class AriannaLogic:
         tuple[Optional[list[dict]], Optional[list[dict]]]
             (history_context, memory_events)
         """
-        ctx = get_history_context(chat_id, reply_to_message_id, end=message_date)
+        # History context removed (no persistence)
+        ctx = None
 
         # Memory events around reply time
         delta = timedelta(minutes=5)

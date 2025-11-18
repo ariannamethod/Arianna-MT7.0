@@ -21,13 +21,9 @@ from aiogram.filters import CommandStart
 from dna import AriannaEssence, create_essence
 from arianna_identity import get_arianna_system_prompt
 from core.vector_store_sqlite import SQLiteVectorStore
-from utils.split_message import split_message
-from utils.deepseek_search import DEEPSEEK_ENABLED
-from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
 from utils.logging import get_logger, set_request_id
-from utils.history_store import log_message
-from utils.memory import add_event
+from connections.memory import add_event
 
 
 logger = get_logger(__name__)
@@ -84,8 +80,8 @@ class TelegramInterface:
             oleg_ids=oleg_ids,
         )
 
-        # Voice state
-        self.voice_enabled = load_voice_state()
+        # Voice state (in-memory, no persistence)
+        self.voice_enabled = {}
 
         # Main menu
         self.main_menu: Optional[types.ReplyKeyboardMarkup] = None
@@ -120,7 +116,7 @@ class TelegramInterface:
 
     def _log_outgoing(self, chat_id: int, msg: types.Message, text: str) -> None:
         """Log outgoing message."""
-        log_message(chat_id, msg.message_id, self.bot_id, self.bot_username, text, "out")
+        logger.debug(f"[OUT] Chat {chat_id}, msg {msg.message_id}: {text[:100]}")
         add_event("message", text, tags=["out", "telegram"])
 
     async def _increment_counter(self, key: str, ttl: int) -> int:
@@ -227,14 +223,7 @@ class TelegramInterface:
             question = caption if caption else "What resonates within this image?"
             perception = await perceive_image(image_url, question)
 
-            log_message(
-                m.chat.id,
-                m.message_id,
-                m.from_user.id,
-                getattr(m.from_user, "username", None),
-                f"<photo: {caption or 'no caption'}>",
-                "in",
-            )
+            logger.debug(f"[IN] Photo from {m.from_user.id} in chat {m.chat.id}")
             add_event("message", f"<photo: {caption}>", tags=["in", "telegram", "photo"])
 
             msg = await m.answer(perception)
@@ -369,9 +358,9 @@ class TelegramInterface:
                 self._log_outgoing(m.chat.id, msg, response_text[:1024])
                 await asyncio.to_thread(os.remove, voice_path)
             else:
-                for chunk in split_message(response_text):
-                    msg = await m.answer(chunk)
-                    self._log_outgoing(m.chat.id, msg, chunk)
+                # Send response (Telegram will handle length limits)
+                msg = await m.answer(response_text)
+                self._log_outgoing(m.chat.id, msg, response_text)
 
         # Schedule followup if requested by essence
         if followup:
@@ -411,9 +400,9 @@ class TelegramInterface:
                     self._log_outgoing(chat_id, msg, response_text[:1024])
                     await asyncio.to_thread(os.remove, voice_path)
                 else:
-                    for chunk in split_message(response_text):
-                        msg = await self.bot.send_message(chat_id, chunk)
-                        self._log_outgoing(chat_id, msg, chunk)
+                    # Send followup (Telegram will handle length limits)
+                    msg = await self.bot.send_message(chat_id, response_text)
+                    self._log_outgoing(chat_id, msg, response_text)
 
     def _register_handlers(self):
         """Register all message handlers."""
@@ -461,11 +450,7 @@ class TelegramInterface:
             await self._perceive_and_respond(m, file_url, caption)
         else:
             # Non-image documents - log and ignore for now
-            log_message(
-                m.chat.id, m.message_id, m.from_user.id,
-                getattr(m.from_user, "username", None),
-                f"<document: {m.document.file_name}>", "in"
-            )
+            logger.debug(f"[IN] Document from {m.from_user.id} in chat {m.chat.id}: {m.document.file_name}")
             # Explicitly return to prevent fall-through to _all_messages
             return
 
@@ -476,32 +461,18 @@ class TelegramInterface:
         user_id = str(m.from_user.id)
 
         if not await self.rate_limited(user_id):
-            log_message(
-                m.chat.id,
-                m.message_id,
-                m.from_user.id,
-                getattr(m.from_user, "username", None),
-                "<voice>",
-                "in",
-            )
-            add_event("message", "<voice>", tags=["in", "telegram"])
+            logger.debug(f"[IN] Voice from {m.from_user.id} in chat {m.chat.id} - rate limited")
+            add_event("message", "<voice>", tags=["in", "telegram", "rate_limited"])
             msg = await m.answer("Too many requests. Please slow down.")
-            self._log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
+            self._log_outgoing(m.chat.id, msg, "Too many requests.")
             return
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
         try:
             await self.bot.download(m.voice.file_id, tmp.name)
             text = await self.transcribe_voice(tmp.name)
-            log_message(
-                m.chat.id,
-                m.message_id,
-                m.from_user.id,
-                getattr(m.from_user, "username", None),
-                text,
-                "in",
-            )
-            add_event("message", text, tags=["in", "telegram"])
+            logger.debug(f"[IN] Voice transcribed from {m.from_user.id}: {text[:100]}")
+            add_event("message", text, tags=["in", "telegram", "voice"])
 
             # Build message for essence
             message = {
@@ -548,15 +519,8 @@ class TelegramInterface:
         user_id = str(m.from_user.id)
         text = m.text or ""
 
-        log_message(
-            m.chat.id,
-            m.message_id,
-            m.from_user.id,
-            getattr(m.from_user, "username", None),
-            text,
-            "in",
-        )
-        add_event("message", text, tags=["in", "telegram"])
+        logger.debug(f"[IN] Text from {m.from_user.id} in chat {m.chat.id}: {text[:100]}")
+        add_event("message", text, tags=["in", "telegram", "text"])
 
         if not await self.rate_limited(user_id):
             msg = await m.answer("Too many requests. Please slow down.")
@@ -651,9 +615,8 @@ class TelegramInterface:
                     self._log_outgoing(m.chat.id, msg, "No relevant documents found.")
                 else:
                     for ch in chunks:
-                        for part in split_message(ch):
-                            msg = await m.answer(part)
-                            self._log_outgoing(m.chat.id, msg, part)
+                        msg = await m.answer(ch)
+                        self._log_outgoing(m.chat.id, msg, ch)
             return True
 
         # /index command
@@ -674,17 +637,15 @@ class TelegramInterface:
         # /voiceon command
         if text.strip().lower() == self.VOICE_ON_CMD:
             self.voice_enabled[m.chat.id] = True
-            save_voice_state(self.voice_enabled)
-            msg = await m.answer("Voice responses enabled")
-            self._log_outgoing(m.chat.id, msg, "Voice responses enabled")
+            msg = await m.answer("Voice responses enabled (session only)")
+            self._log_outgoing(m.chat.id, msg, "Voice enabled")
             return True
 
         # /voiceoff command
         if text.strip().lower() == self.VOICE_OFF_CMD:
             self.voice_enabled[m.chat.id] = False
-            save_voice_state(self.voice_enabled)
             msg = await m.answer("Voice responses disabled")
-            self._log_outgoing(m.chat.id, msg, "Voice responses disabled")
+            self._log_outgoing(m.chat.id, msg, "Voice disabled")
             return True
 
         # /ds command (DeepSeek) - not integrated with essence yet
