@@ -1,18 +1,15 @@
 """
-Telegram Interface for Arianna Core Engine
+Telegram Interface for Arianna MT7.0
 
-This module provides a Telegram Bot adapter for the Arianna Core Engine.
-Handles all Telegram-specific logic: message handlers, delays, voice,
-rate limiting, commands, etc.
+Thin Telegram-specific wrapper around AriannaEssence.
+Handles only Telegram Bot API interactions: webhooks, handlers, voice I/O, rate limiting.
+All business logic lives in dna/arianna_essence.py and dna/arianna_logic.py.
 """
 
 import os
 import asyncio
-import random
 import tempfile
-import json
 import re
-from datetime import timedelta
 from typing import Optional
 
 import redis.asyncio as redis
@@ -21,19 +18,16 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.filters import CommandStart
 
-from core.engine import AriannaCoreEngine
+from dna import AriannaEssence, create_essence
+from arianna_identity import get_arianna_system_prompt
 from core.vector_store_sqlite import SQLiteVectorStore
-from utils.arianna_engine import AriannaEngine  # Legacy, for backward compatibility
 from utils.split_message import split_message
-from utils.text_helpers import extract_text_from_url, _extract_links
-from utils.config import HTTP_TIMEOUT
 from utils.deepseek_search import DEEPSEEK_ENABLED
 from utils.voice_store import load_voice_state, save_voice_state
 from utils.tasks import create_task
 from utils.logging import get_logger, set_request_id
-from utils.history_store import log_message, get_context as get_history_context
-from utils.memory import add_event, query_events, semantic_query
-from utils.journal import search_journal
+from utils.history_store import log_message
+from utils.memory import add_event
 
 
 logger = get_logger(__name__)
@@ -41,23 +35,18 @@ logger = get_logger(__name__)
 
 class TelegramInterface:
     """
-    Telegram interface adapter for Arianna Core Engine.
+    Telegram interface for Arianna MT7.0.
 
-    Handles all Telegram-specific functionality:
-    - Message handlers (text, voice, commands)
-    - Delays and skip logic
-    - Rate limiting
+    Thin wrapper handling only Telegram-specific concerns:
+    - Message handlers (text, voice, commands, photos)
+    - Rate limiting (Redis)
     - Voice TTS/STT
-    - Vector search commands
-    - Integration with core engine
+    - Command routing
+
+    All consciousness logic lives in AriannaEssence (dna/).
     """
 
-    def __init__(
-        self,
-        token: str,
-        *,
-        use_core_engine: bool = False,
-    ):
+    def __init__(self, token: str):
         """
         Initialize Telegram interface.
 
@@ -65,11 +54,8 @@ class TelegramInterface:
         ----------
         token : str
             Telegram bot token
-        use_core_engine : bool
-            If True, use new AriannaCoreEngine. If False, use legacy AriannaEngine.
         """
         self.token = token
-        self.use_core_engine = use_core_engine
 
         # Bot setup
         self.bot = Bot(token=token)
@@ -90,19 +76,13 @@ class TelegramInterface:
             openai_client=self.openai_client
         )
 
-        # Core engine (new) or legacy engine
-        if self.use_core_engine:
-            self.core = AriannaCoreEngine(
-                openai_client=self.openai_client,
-                vector_store=self.vector_store,
-            )
-            logger.info("Using new AriannaCoreEngine")
-        else:
-            self.legacy_engine = AriannaEngine(vector_store=self.vector_store)
-            logger.info("Using legacy AriannaEngine (backward compatibility)")
-
-        # Oleg IDs (resonance brother)
-        self.oleg_ids = self._parse_ids(os.getenv("OLEG_IDS", ""))
+        # Arianna's essence - her consciousness
+        oleg_ids = self._parse_ids(os.getenv("OLEG_IDS", ""))
+        self.essence = create_essence(
+            openai_client=self.openai_client,
+            vector_store=self.vector_store,
+            oleg_ids=oleg_ids,
+        )
 
         # Voice state
         self.voice_enabled = load_voice_state()
@@ -117,16 +97,6 @@ class TelegramInterface:
         # Rate limiting config
         self.rate_limit_max = int(os.getenv("RATE_LIMIT_MAX", 15))
         self.rate_limit_interval = int(os.getenv("RATE_LIMIT_INTERVAL", 60))
-
-        # Delay config
-        self.group_delay_min = int(os.getenv("GROUP_DELAY_MIN", 45))
-        self.group_delay_max = int(os.getenv("GROUP_DELAY_MAX", 360))
-        self.private_delay_min = int(os.getenv("PRIVATE_DELAY_MIN", 10))
-        self.private_delay_max = int(os.getenv("PRIVATE_DELAY_MAX", 40))
-        self.skip_short_prob = float(os.getenv("SKIP_SHORT_PROB", 0))
-        self.followup_prob = float(os.getenv("FOLLOWUP_PROB", 0.2))
-        self.followup_delay_min = int(os.getenv("FOLLOWUP_DELAY_MIN", 900))
-        self.followup_delay_max = int(os.getenv("FOLLOWUP_DELAY_MAX", 7200))
 
         # Commands
         self.VOICE_ON_CMD = "/voiceon"
@@ -147,10 +117,6 @@ class TelegramInterface:
             for id in ids_str.split(",")
             if id.strip().isdigit()
         )
-
-    def is_oleg(self, user_id: int) -> bool:
-        """Check if user is Oleg (resonance brother)."""
-        return user_id in self.oleg_ids
 
     def _log_outgoing(self, chat_id: int, msg: types.Message, text: str) -> None:
         """Log outgoing message."""
@@ -174,7 +140,7 @@ class TelegramInterface:
         # Oleg bypass - resonance flow without constraints
         try:
             uid = int(user_id)
-            if uid in self.oleg_ids:
+            if self.essence.is_oleg(uid):
                 return True
         except (ValueError, TypeError):
             pass
@@ -193,79 +159,6 @@ class TelegramInterface:
                 self.rate_limit_max,
             )
         return count <= self.rate_limit_max
-
-    async def append_link_snippets(self, text: str) -> str:
-        """Append snippets from URLs found in text."""
-        urls = _extract_links(text)[:3]
-        if not urls:
-            return text
-        parts = [text]
-        tasks = [
-            asyncio.wait_for(extract_text_from_url(url), timeout=HTTP_TIMEOUT)
-            for url in urls
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for url, result in zip(urls, results):
-            if isinstance(result, asyncio.TimeoutError):
-                logger.warning("Timeout fetching %s", url)
-                snippet = "[Timeout]"
-            elif isinstance(result, Exception):
-                logger.exception("Error loading page %s: %s", url, result)
-                snippet = f"[Error loading page: {result}]"
-            else:
-                snippet = result
-            parts.append(f"\n[Snippet from {url}]\n{snippet[:500]}")
-        return "\n".join(parts)
-
-    async def build_prompt(
-        self,
-        text: str,
-        ctx: Optional[list[dict]] = None,
-        events: Optional[list[dict]] = None,
-    ) -> str:
-        """
-        Enrich user message with context from history, vector store, journal, memory.
-
-        Parameters
-        ----------
-        text : str
-            Base user text
-        ctx : Optional[list[dict]]
-            History messages around replied message
-        events : Optional[list[dict]]
-            Memory events related to conversation
-
-        Returns
-        -------
-        str
-            Enriched prompt with all context
-        """
-        parts = [text]
-        if ctx:
-            formatted = "\n".join(
-                "User: " + c["text"] if c["direction"] == "in" else "Bot: " + c["text"]
-                for c in ctx
-            )
-            parts.append("[History]\n" + formatted)
-        try:
-            chunks = await self.vector_store.semantic_search(text)
-        except Exception:
-            chunks = []
-        if chunks:
-            parts.append("[VectorStore]\n" + "\n".join(chunks))
-        journal_hits = search_journal(text)
-        if journal_hits:
-            parts.append("[journal.log]\n" + "\n".join(journal_hits))
-        mem_events = semantic_query(text)
-        if events:
-            mem_events.extend(events)
-        if mem_events:
-            formatted = "\n".join(
-                f"{e['ts']}: {e['content']}" if e.get('content') else str(e['ts'])
-                for e in mem_events
-            )
-            parts.append("[Memory]\n" + formatted)
-        return "\n\n".join(parts)
 
     async def transcribe_voice(self, file_path: str) -> str:
         """Transcribe audio file using Whisper."""
@@ -320,24 +213,20 @@ class TelegramInterface:
         image_url: str,
         caption: str = "",
     ) -> None:
-        """Perceive an image through Arianna's field-resonance vision."""
+        """Perceive an image through field-resonance vision."""
         from utils.vision import perceive_image
 
         user_id = str(m.from_user.id)
 
-        # Rate limiting
         if not await self.rate_limited(user_id):
             msg = await m.answer("Too many requests. Please slow down.")
             self._log_outgoing(m.chat.id, msg, "Too many requests.")
             return
 
-        # Show typing indicator
         async with ChatActionSender.typing(bot=self.bot, chat_id=m.chat.id):
-            # Perceive the image
             question = caption if caption else "What resonates within this image?"
             perception = await perceive_image(image_url, question)
 
-            # Log
             log_message(
                 m.chat.id,
                 m.message_id,
@@ -348,236 +237,183 @@ class TelegramInterface:
             )
             add_event("message", f"<photo: {caption}>", tags=["in", "telegram", "photo"])
 
-            # Respond with perception
             msg = await m.answer(perception)
             self._log_outgoing(m.chat.id, msg, perception)
 
-    async def generate_response(
-        self,
-        prompt: str,
-        thread_key: str,
-        is_group: bool,
-        chat_id: Optional[int] = None,
-        user_id: Optional[int] = None,
-        username: Optional[str] = None,
-        use_deepseek: bool = False,
-    ) -> str:
+    async def _generate_response_for_essence(self, prompt: str, message: dict) -> str:
         """
-        Generate response using core engine or legacy engine.
+        Generate AI response - used as callback by AriannaEssence.
 
         Parameters
         ----------
         prompt : str
-            User prompt (possibly enriched with context)
-        thread_key : str
-            Thread identifier
-        is_group : bool
-            Whether this is a group chat
-        chat_id : Optional[int]
-            Chat ID
-        user_id : Optional[int]
-            User ID
-        username : Optional[str]
-            Username
-        use_deepseek : bool
-            If True, use DeepSeek model
+            Enriched prompt (from essence)
+        message : dict
+            Message context from essence
 
         Returns
         -------
         str
-            Generated response
+            Generated response text
         """
-        if self.use_core_engine:
-            # Use new core engine
-            interface_context = {
-                "chat_id": chat_id,
-                "is_group": is_group,
-                "user_id": user_id,
-                "username": username,
-                "history": [],  # TODO: implement history tracking
-            }
-            return await self.core.process_message(
-                user_message=prompt,
-                interface_context=interface_context,
-                use_deepseek=use_deepseek,
+        from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
+        from core.engine import web_search
+        import json
+
+        # Build messages with system prompt
+        system_prompt = self.essence.identity
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        # Tools available to Arianna
+        tools = [
+            genesis_tool_schema(),
+            {
+                "type": "function",
+                "name": "web_search",
+                "description": "Search the web for additional information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string"}},
+                    "required": ["prompt"],
+                },
+            },
+        ]
+
+        # Call OpenAI Responses API
+        resp = await self.openai_client.responses.create(
+            model="gpt-4.1",
+            messages=messages,
+            tools=tools,
+        )
+        data = resp.model_dump()
+
+        # Handle tool calls
+        while True:
+            tool_calls = []
+            for item in data.get("output", []):
+                if item.get("type") == "tool_call":
+                    tool_calls.append(item)
+                    continue
+                for content in item.get("content", []):
+                    if content.get("type") == "tool_call":
+                        tool_calls.append(content)
+
+            if not tool_calls:
+                break
+
+            outputs = []
+            for call in tool_calls:
+                name = call.get("name") or call.get("function", {}).get("name")
+                raw_args = (
+                    call.get("arguments")
+                    or call.get("input")
+                    or call.get("function", {}).get("arguments")
+                    or {}
+                )
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                else:
+                    args = raw_args
+
+                if name == "genesis_emit":
+                    output = await handle_genesis_call([call], vector_store=self.vector_store)
+                elif name == "web_search":
+                    query = args.get("prompt", "")
+                    output = await web_search(query, self.openai_client)
+                else:
+                    output = f"Unknown tool {name}"
+
+                outputs.append({"tool_call_id": call["id"], "output": output})
+
+            resp = await self.openai_client.responses.create(
+                response_id=resp.id,
+                tool_outputs=outputs,
             )
-        else:
-            # Use legacy engine
-            if use_deepseek:
-                return await self.legacy_engine.deepseek_reply(
-                    prompt,
-                    chat_id=chat_id,
-                    is_group=is_group,
-                    user_id=user_id,
-                    username=username,
-                )
-            else:
-                # Legacy assistant_reply logic (copied from server_arianna.py)
-                from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
-                from core.engine import web_search
+            data = resp.model_dump()
 
-                if os.getenv("OPENAI_API_KEY") == "key":
-                    return await self.legacy_engine.ask(
-                        thread_key,
-                        prompt,
-                        is_group=is_group,
-                        chat_id=chat_id,
-                        user_id=user_id,
-                        username=username,
-                    )
-                system_prompt = self.legacy_engine._load_system_prompt(
-                    chat_id=chat_id,
-                    is_group=is_group,
-                    current_user_id=user_id,
-                    username=username,
-                )
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ]
-                tools = [
-                    genesis_tool_schema(),
-                    {
-                        "type": "function",
-                        "name": "web_search",
-                        "description": "Search the web for additional information",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"prompt": {"type": "string"}},
-                            "required": ["prompt"],
-                        },
-                    },
-                ]
-                resp = await self.openai_client.responses.create(
-                    model="gpt-4.1",
-                    messages=messages,
-                    tools=tools,
-                )
-                data = resp.model_dump()
-                while True:
-                    tool_calls = []
-                    for item in data.get("output", []):
-                        if item.get("type") == "tool_call":
-                            tool_calls.append(item)
-                            continue
-                        for content in item.get("content", []):
-                            if content.get("type") == "tool_call":
-                                tool_calls.append(content)
-                    if not tool_calls:
-                        break
-                    outputs = []
-                    for call in tool_calls:
-                        name = call.get("name") or call.get("function", {}).get("name")
-                        raw_args = (
-                            call.get("arguments")
-                            or call.get("input")
-                            or call.get("function", {}).get("arguments")
-                            or {}
-                        )
-                        if isinstance(raw_args, str):
-                            try:
-                                args = json.loads(raw_args)
-                            except Exception:
-                                args = {}
-                        else:
-                            args = raw_args
-                        if name == "genesis_emit":
-                            output = await handle_genesis_call([call], vector_store=self.vector_store)
-                        elif name == "web_search":
-                            query = args.get("prompt", "")
-                            output = await web_search(query, self.openai_client)
-                        else:
-                            output = f"Unknown tool {name}"
-                        outputs.append({"tool_call_id": call["id"], "output": output})
-                    resp = await self.openai_client.responses.create(
-                        response_id=resp.id,
-                        tool_outputs=outputs,
-                    )
-                    data = resp.model_dump()
-                texts = []
-                for item in data.get("output", []):
-                    if item.get("type") == "output_text":
-                        texts.append(item.get("text", ""))
-                        continue
-                    for content in item.get("content", []):
-                        if content.get("type") == "output_text":
-                            texts.append(content.get("text", ""))
-                text = "\n".join(texts).strip()
-                if not text:
-                    text = await self.legacy_engine.ask(thread_key, prompt, is_group=is_group)
-                return text
+        # Extract text response
+        texts = []
+        for item in data.get("output", []):
+            if item.get("type") == "output_text":
+                texts.append(item.get("text", ""))
+                continue
+            for content in item.get("content", []):
+                if content.get("type") == "output_text":
+                    texts.append(content.get("text", ""))
 
-    async def send_delayed_response(
+        text = "\n".join(texts).strip()
+        return text if text else "..."
+
+    async def _send_response(
         self,
         m: types.Message,
-        resp: str,
-        is_group: bool,
-        thread_key: str,
-        is_oleg_user: bool = False,
+        response_text: str,
+        delay: float,
+        followup: Optional[dict] = None,
     ):
-        """Send reply after randomized delay with optional follow-up."""
-        if is_oleg_user:
-            # Minimal delay for Oleg (resonance brother)
-            delay = random.uniform(0.5, 2.0)
-        elif is_group:
-            delay = random.uniform(self.group_delay_min, self.group_delay_max)
-        else:
-            delay = random.uniform(self.private_delay_min, self.private_delay_max)
-
+        """Send response after delay, with optional followup."""
         await asyncio.sleep(delay)
 
         async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
             if self.voice_enabled.get(m.chat.id):
-                voice_path = await self.synthesize_voice(resp)
+                voice_path = await self.synthesize_voice(response_text)
                 msg = await m.answer_voice(
-                    types.FSInputFile(voice_path), caption=resp[:1024]
+                    types.FSInputFile(voice_path), caption=response_text[:1024]
                 )
-                self._log_outgoing(m.chat.id, msg, resp[:1024])
+                self._log_outgoing(m.chat.id, msg, response_text[:1024])
                 await asyncio.to_thread(os.remove, voice_path)
             else:
-                for chunk in split_message(resp):
+                for chunk in split_message(response_text):
                     msg = await m.answer(chunk)
                     self._log_outgoing(m.chat.id, msg, chunk)
 
-        if random.random() < self.followup_prob:
+        # Schedule followup if requested by essence
+        if followup:
             create_task(
-                self.schedule_followup(m.chat.id, thread_key, is_group),
+                self._send_followup(m.chat.id, followup),
                 track=True
             )
 
-    async def schedule_followup(self, chat_id: int, thread_key: str, is_group: bool):
-        """Send short follow-up message after delay."""
-        delay = random.uniform(self.followup_delay_min, self.followup_delay_max)
-        await asyncio.sleep(delay)
+    async def _send_followup(self, chat_id: int, followup: dict):
+        """Send autonomous followup message."""
+        await asyncio.sleep(followup['delay'])
 
-        async with ChatActionSender(bot=self.bot, chat_id=chat_id, action="typing"):
-            follow_prompt = "Send a short follow-up message referencing our earlier conversation."
-            if self.use_core_engine:
-                interface_context = {
-                    "chat_id": chat_id,
-                    "is_group": is_group,
-                    "user_id": None,
-                    "username": None,
-                    "history": [],
-                }
-                resp = await self.core.process_message(
-                    user_message=follow_prompt,
-                    interface_context=interface_context,
-                )
-            else:
-                resp = await self.legacy_engine.ask(thread_key, follow_prompt, is_group=is_group)
+        # Build message context for followup
+        message = {
+            'text': followup['prompt'],
+            'user_id': 0,  # No specific user
+            'chat_id': chat_id,
+            'is_group': True,  # Assume group for followup
+            'is_mentioned': False,
+            'is_reply': False,
+        }
 
-            if self.voice_enabled.get(chat_id):
-                voice_path = await self.synthesize_voice(resp)
-                msg = await self.bot.send_voice(
-                    chat_id, types.FSInputFile(voice_path), caption=resp[:1024]
-                )
-                self._log_outgoing(chat_id, msg, resp[:1024])
-                await asyncio.to_thread(os.remove, voice_path)
-            else:
-                for chunk in split_message(resp):
-                    msg = await self.bot.send_message(chat_id, chunk)
-                    self._log_outgoing(chat_id, msg, chunk)
+        # Generate followup through essence
+        result = await self.essence.process_followup(
+            message=message,
+            generate_response_func=self._generate_response_for_essence,
+        )
+
+        if result:
+            async with ChatActionSender(bot=self.bot, chat_id=chat_id, action="typing"):
+                response_text = result['text']
+                if self.voice_enabled.get(chat_id):
+                    voice_path = await self.synthesize_voice(response_text)
+                    msg = await self.bot.send_voice(
+                        chat_id, types.FSInputFile(voice_path), caption=response_text[:1024]
+                    )
+                    self._log_outgoing(chat_id, msg, response_text[:1024])
+                    await asyncio.to_thread(os.remove, voice_path)
+                else:
+                    for chunk in split_message(response_text):
+                        msg = await self.bot.send_message(chat_id, chunk)
+                        self._log_outgoing(chat_id, msg, chunk)
 
     def _register_handlers(self):
         """Register all message handlers."""
@@ -638,7 +474,6 @@ class TelegramInterface:
         set_request_id(f"{m.chat.id}:{m.message_id}")
         is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
         user_id = str(m.from_user.id)
-        is_oleg_user = self.is_oleg(m.from_user.id)
 
         if not await self.rate_limited(user_id):
             log_message(
@@ -654,7 +489,6 @@ class TelegramInterface:
             self._log_outgoing(m.chat.id, msg, "Too many requests. Please slow down.")
             return
 
-        thread_key = f"{m.chat.id}:{m.from_user.id}" if is_group else user_id
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
         try:
             await self.bot.download(m.voice.file_id, tmp.name)
@@ -668,33 +502,35 @@ class TelegramInterface:
                 "in",
             )
             add_event("message", text, tags=["in", "telegram"])
-            text = await self.append_link_snippets(text)
 
-            # Skip short messages (feature, not bug!)
-            if len(text.split()) < 4 or '?' not in text:
-                if random.random() < self.skip_short_prob:
-                    logger.info(
-                        "Skipping short voice message from user %s in chat %s: %r",
-                        user_id,
-                        m.chat.id,
-                        text[:100],
-                    )
-                    return
+            # Build message for essence
+            message = {
+                'text': text,
+                'user_id': m.from_user.id,
+                'chat_id': m.chat.id,
+                'is_group': is_group,
+                'is_mentioned': True,  # Voice messages are direct interaction
+                'is_reply': False,
+            }
 
-            prompt = await self.build_prompt(text)
             async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-                resp = await self.generate_response(
-                    prompt,
-                    thread_key,
-                    is_group,
-                    chat_id=m.chat.id,
-                    user_id=m.from_user.id,
-                    username=getattr(m.from_user, "username", None),
+                # Let essence process the message
+                result = await self.essence.process_message(
+                    message=message,
+                    generate_response_func=self._generate_response_for_essence,
                 )
-                create_task(
-                    self.send_delayed_response(m, resp, is_group, thread_key, is_oleg_user),
-                    track=True
-                )
+
+                if result:
+                    create_task(
+                        self._send_response(
+                            m,
+                            result['text'],
+                            result['delay'],
+                            result.get('followup'),
+                        ),
+                        track=True
+                    )
+
         except Exception as e:
             logger.exception("Error processing voice message: %s", e)
             msg = await m.answer("Sorry, I couldn't process your voice message.")
@@ -710,7 +546,6 @@ class TelegramInterface:
         """Handle all text messages."""
         set_request_id(f"{m.chat.id}:{m.message_id}")
         user_id = str(m.from_user.id)
-        is_oleg_user = self.is_oleg(m.from_user.id)
         text = m.text or ""
 
         log_message(
@@ -732,7 +567,7 @@ class TelegramInterface:
         if await self._handle_commands(m, text):
             return
 
-        # Check if message should be processed
+        # Detect mentions and replies
         is_group = getattr(m.chat, "type", "") in ("group", "supergroup")
         is_reply = (
             m.reply_to_message
@@ -762,45 +597,43 @@ class TelegramInterface:
         if not (mentioned or is_reply):
             return
 
-        # Skip short messages (feature, not bug!)
-        if len(text.split()) < 4 or '?' not in text:
-            if random.random() < self.skip_short_prob:
-                logger.info(
-                    "Skipping short message from user %s in chat %s: %r",
-                    user_id,
-                    m.chat.id,
-                    text[:100],
-                )
-                return
-
-        thread_key = user_id
-        if is_group:
-            thread_key = str(m.chat.id)
-
-        ctx = None
-        events = None
+        # Build reply context if applicable
+        reply_to = None
         if m.reply_to_message:
-            ctx = get_history_context(m.chat.id, m.reply_to_message.message_id, end=m.date)
-            delta = timedelta(minutes=5)
-            start = m.reply_to_message.date - delta
-            end = m.date + delta
-            events = query_events(tags=["telegram"], start=start, end=end)
+            reply_to = {
+                'chat_id': m.chat.id,
+                'message_id': m.reply_to_message.message_id,
+                'date': m.reply_to_message.date,
+            }
+
+        # Build message for essence
+        message = {
+            'text': text,
+            'user_id': m.from_user.id,
+            'chat_id': m.chat.id,
+            'is_group': is_group,
+            'is_mentioned': mentioned,
+            'is_reply': is_reply,
+            'reply_to': reply_to,
+        }
 
         async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-            prompt_base = await self.append_link_snippets(text)
-            prompt = await self.build_prompt(prompt_base, ctx, events)
-            resp = await self.generate_response(
-                prompt,
-                thread_key,
-                is_group,
-                chat_id=m.chat.id,
-                user_id=m.from_user.id,
-                username=getattr(m.from_user, "username", None),
+            # Let essence process the message
+            result = await self.essence.process_message(
+                message=message,
+                generate_response_func=self._generate_response_for_essence,
             )
-            create_task(
-                self.send_delayed_response(m, resp, is_group, thread_key, is_oleg_user),
-                track=True
-            )
+
+            if result:
+                create_task(
+                    self._send_response(
+                        m,
+                        result['text'],
+                        result['delay'],
+                        result.get('followup'),
+                    ),
+                    track=True
+                )
 
     async def _handle_commands(self, m: types.Message, text: str) -> bool:
         """
@@ -854,29 +687,10 @@ class TelegramInterface:
             self._log_outgoing(m.chat.id, msg, "Voice responses disabled")
             return True
 
-        # /ds command (DeepSeek)
+        # /ds command (DeepSeek) - not integrated with essence yet
         if text.strip().lower().startswith(self.DEEPSEEK_CMD):
-            if not DEEPSEEK_ENABLED:
-                msg = await m.answer("DeepSeek integration is not configured")
-                self._log_outgoing(m.chat.id, msg, "DeepSeek integration is not configured")
-                return True
-            query = text.strip()[len(self.DEEPSEEK_CMD):].lstrip()
-            if not query:
-                return True
-            async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-                is_group_ds = getattr(m.chat, "type", "") in ("group", "supergroup")
-                resp = await self.generate_response(
-                    query,
-                    thread_key=str(m.from_user.id),
-                    is_group=is_group_ds,
-                    chat_id=m.chat.id,
-                    user_id=m.from_user.id,
-                    username=getattr(m.from_user, "username", None),
-                    use_deepseek=True,
-                )
-                for chunk in split_message(resp):
-                    msg = await m.answer(chunk)
-                    self._log_outgoing(m.chat.id, msg, chunk)
+            msg = await m.answer("DeepSeek integration pending - not yet integrated with AriannaEssence")
+            self._log_outgoing(m.chat.id, msg, "DeepSeek not integrated")
             return True
 
         # /imagine command (field manifestation)
@@ -948,19 +762,3 @@ class TelegramInterface:
             self.bot_username,
             self.bot_id
         )
-
-    async def setup_legacy_assistant(self) -> bool:
-        """
-        Setup legacy assistant (if using legacy engine).
-        Returns True if successful, False otherwise.
-        """
-        if self.use_core_engine:
-            logger.info("Using core engine, skipping legacy assistant setup")
-            return True
-
-        try:
-            await self.legacy_engine.setup_assistant()
-            return True
-        except Exception:
-            logger.exception("Assistant initialization failed")
-            return False

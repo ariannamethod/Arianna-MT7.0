@@ -1,12 +1,7 @@
 """
-Arianna Telegram Server - Entry Point
+Arianna MT7.0 - Main Entry Point
 
-This is the main entry point for the Telegram interface.
-All Telegram-specific logic has been moved to interfaces/telegram_bot.py.
-This file handles:
-- Webhook setup
-- Snapshot service
-- Health check routes
+Telegram webhook server for Arianna's essence.
 """
 
 import os
@@ -25,7 +20,6 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Health check routes
 async def healthz(request):
     """Health check endpoint."""
     return web.Response(text="ok")
@@ -38,21 +32,14 @@ async def status(request):
 
 async def main():
     """Main entry point - setup webhook and start services."""
-    # Get bot token
     bot_token = os.getenv("TELEGRAM_TOKEN")
     if not bot_token:
         raise ValueError("TELEGRAM_TOKEN environment variable is required")
 
-    # Create Telegram interface
-    # Set use_core_engine=True to use new AriannaCoreEngine
-    # Set use_core_engine=False to use legacy AriannaEngine (default for now)
-    use_core = os.getenv("USE_CORE_ENGINE", "false").lower() == "true"
-    interface = TelegramInterface(token=bot_token, use_core_engine=use_core)
+    # Create Telegram interface with AriannaEssence
+    interface = TelegramInterface(token=bot_token)
 
-    logger.info(
-        "Starting Arianna MT7.0 Telegram interface (core_engine=%s)",
-        use_core
-    )
+    logger.info("Starting Arianna MT7.0 Telegram interface")
 
     # Initialize interface (setup bot commands, get bot info, etc.)
     await interface.on_startup()
@@ -64,11 +51,6 @@ async def main():
     except Exception as e:
         logger.error("Repository check failed: %s", e, exc_info=True)
 
-    # Setup legacy assistant if needed
-    init_failed = False
-    if not use_core:
-        init_failed = not await interface.setup_legacy_assistant()
-
     # Start background services
     create_task(run_snapshot_service(), name="snapshot_service", track=True)
 
@@ -77,23 +59,16 @@ async def main():
         app = web.Application()
         path = f"/webhook/{bot_token}"
 
-        if init_failed:
-            # If assistant init failed, return 500 on webhook
-            async def failed(request):
-                return web.Response(status=500, text="Initialization failed")
-            app.router.add_route("*", path, failed)
-            app.router.add_route("*", "/webhook", failed)
-        else:
-            # Normal webhook handler
-            handler = SimpleRequestHandler(
-                dispatcher=interface.dp,
-                bot=interface.bot
-            )
-            handler.register(app, path=path)
-            handler.register(app, path="/webhook")
-            setup_application(app, interface.dp)
+        # Webhook handler
+        handler = SimpleRequestHandler(
+            dispatcher=interface.dp,
+            bot=interface.bot
+        )
+        handler.register(app, path=path)
+        handler.register(app, path="/webhook")
+        setup_application(app, interface.dp)
 
-        # Register health check routes
+        # Health check routes
         app.router.add_get("/healthz", healthz)
         app.router.add_get("/status", status)
 
@@ -111,7 +86,6 @@ async def main():
         # Wait forever
         await asyncio.Event().wait()
     finally:
-        # Cancel all tracked tasks
         await cancel_tracked()
 
 

@@ -1,1 +1,1 @@
-web: python server_arianna.py
+web: python main.py
