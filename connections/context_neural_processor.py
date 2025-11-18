@@ -16,7 +16,7 @@ import re
 import json
 import logging
 
-from utils.archive import safe_extract
+from connections.archive import safe_extract
 
 try:  # Optional dependency
     from bs4 import BeautifulSoup

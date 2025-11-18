@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
-from utils.cache import async_ttl_cache
+from connections.cache import async_ttl_cache
 from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger
 

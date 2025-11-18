@@ -22,7 +22,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - no scipy installed
     scipy_entropy = None  # type: ignore
 
-from utils.atomic_json import atomic_json_dump
+from connections.atomic_json import atomic_json_dump
 from utils.logging import get_logger
 from connections.memory import add_event
 
