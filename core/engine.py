@@ -16,8 +16,8 @@ import json
 from typing import Optional, Any
 from openai import AsyncOpenAI
 
-from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
-from utils.newgenesis2 import weave_intuitive_layer
+from connections.genesis_tool import genesis_tool_schema, handle_genesis_call
+from connections.newgenesis2 import weave_intuitive_layer
 from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.logging import get_logger

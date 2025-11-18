@@ -214,7 +214,7 @@ class TelegramInterface:
         caption: str = "",
     ) -> None:
         """Perceive an image through field-resonance vision."""
-        from utils.vision import perceive_image
+        from connections.vision import perceive_image
 
         user_id = str(m.from_user.id)
 
@@ -256,7 +256,7 @@ class TelegramInterface:
         str
             Generated response text
         """
-        from utils.genesis_tool import genesis_tool_schema, handle_genesis_call
+        from connections.genesis_tool import genesis_tool_schema, handle_genesis_call
         from core.engine import web_search
         import json
 
@@ -695,7 +695,7 @@ class TelegramInterface:
 
         # /imagine command (field manifestation)
         if text.strip().lower().startswith(self.IMAGINE_CMD):
-            from utils.imagine import imagine
+            from connections.imagine import imagine
 
             prompt = text.strip()[len(self.IMAGINE_CMD):].lstrip()
             if not prompt:
