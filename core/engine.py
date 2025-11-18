@@ -18,7 +18,6 @@ from openai import AsyncOpenAI
 
 from connections.genesis_tool import genesis_tool_schema, handle_genesis_call
 from connections.newgenesis2 import weave_intuitive_layer
-from utils.deepseek_search import call_deepseek
 from utils.journal import log_event
 from utils.logging import get_logger
 from utils.config import HTTP_TIMEOUT
@@ -295,64 +294,11 @@ class AriannaCoreEngine:
             logger.error("Failed to process with Responses API: %s", e, exc_info=True)
             return f"Error processing message: {e}"
 
-    async def process_with_deepseek(
-        self,
-        *,
-        user_message: str,
-        chat_id: Optional[int] = None,
-        is_group: bool = False,
-        user_id: Optional[int] = None,
-        username: Optional[str] = None,
-    ) -> str:
-        """
-        Process message using DeepSeek model.
-
-        Used as auxiliary model when OpenAI is unavailable or for specific tasks.
-
-        Parameters
-        ----------
-        user_message : str
-            User's message text
-        chat_id : Optional[int]
-            Chat/conversation ID
-        is_group : bool
-            Whether this is a group chat
-        user_id : Optional[int]
-            User's ID
-        username : Optional[str]
-            User's username
-
-        Returns
-        -------
-        str
-            Generated response text
-        """
-        system_prompt = self.build_system_prompt(
-            chat_id=chat_id,
-            is_group=is_group,
-            current_user_id=user_id,
-            username=username,
-        )
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
-
-        reply = await call_deepseek(messages)
-        if reply is None:
-            return "DeepSeek did not return a response"
-
-        # Weave Genesis-2 intuitive layer (15% probability)
-        final_reply = await weave_intuitive_layer(user_message, reply)
-        return final_reply
-
     async def process_message(
         self,
         *,
         user_message: str,
         interface_context: dict[str, Any],
-        use_deepseek: bool = False,
     ) -> str:
         """
         Main interface-independent message processing method.
@@ -371,8 +317,6 @@ class AriannaCoreEngine:
             - user_id: Optional[int]
             - username: Optional[str]
             - history: Optional[list[dict]] (for Responses API)
-        use_deepseek : bool
-            If True, use DeepSeek instead of OpenAI
 
         Returns
         -------
@@ -386,24 +330,15 @@ class AriannaCoreEngine:
         username = interface_context.get("username")
         history = interface_context.get("history")
 
-        # Route to appropriate model
-        if use_deepseek:
-            response = await self.process_with_deepseek(
-                user_message=user_message,
-                chat_id=chat_id,
-                is_group=is_group,
-                user_id=user_id,
-                username=username,
-            )
-        else:
-            response = await self.process_with_responses_api(
-                user_message=user_message,
-                chat_id=chat_id,
-                is_group=is_group,
-                user_id=user_id,
-                username=username,
-                history=history,
-            )
+        # Process with OpenAI Responses API
+        response = await self.process_with_responses_api(
+            user_message=user_message,
+            chat_id=chat_id,
+            is_group=is_group,
+            user_id=user_id,
+            username=username,
+            history=history,
+        )
 
         # Log interaction
         log_event({
@@ -413,7 +348,7 @@ class AriannaCoreEngine:
             "is_group": is_group,
             "prompt": user_message,
             "reply": response,
-            "model": "deepseek" if use_deepseek else "openai",
+            "model": "openai",
         })
 
         return response
