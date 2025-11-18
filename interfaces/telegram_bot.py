@@ -275,7 +275,7 @@ class TelegramInterface:
         # Call OpenAI Responses API
         resp = await self.openai_client.responses.create(
             model="gpt-4.1",
-            messages=messages,
+            input=messages,  # Responses API uses 'input', not 'messages'
             tools=tools,
         )
         data = resp.model_dump()
