@@ -291,12 +291,12 @@ class TelegramInterface:
         ogg_fd.close()
         try:
             try:
-                resp = await self.openai_client.audio.speech.with_streaming_response.create(
+                async with self.openai_client.audio.speech.with_streaming_response.create(
                     model="tts-1",
                     voice="alloy",
                     input=text,
-                )
-                await resp.stream_to_file(mp3_fd.name)
+                ) as resp:
+                    await resp.stream_to_file(mp3_fd.name)
             except Exception as e:
                 logger.exception("Speech synthesis request failed: %s", e)
                 raise RuntimeError("Failed to synthesize voice. Please try again later.") from e
@@ -450,7 +450,7 @@ class TelegramInterface:
                 ]
                 resp = await self.openai_client.responses.create(
                     model="gpt-4.1",
-                    input=messages,
+                    messages=messages,
                     tools=tools,
                 )
                 data = resp.model_dump()
@@ -533,7 +533,7 @@ class TelegramInterface:
                     types.FSInputFile(voice_path), caption=resp[:1024]
                 )
                 self._log_outgoing(m.chat.id, msg, resp[:1024])
-                os.remove(voice_path)
+                await asyncio.to_thread(os.remove, voice_path)
             else:
                 for chunk in split_message(resp):
                     msg = await m.answer(chunk)
@@ -573,7 +573,7 @@ class TelegramInterface:
                     chat_id, types.FSInputFile(voice_path), caption=resp[:1024]
                 )
                 self._log_outgoing(chat_id, msg, resp[:1024])
-                os.remove(voice_path)
+                await asyncio.to_thread(os.remove, voice_path)
             else:
                 for chunk in split_message(resp):
                     msg = await self.bot.send_message(chat_id, chunk)
@@ -624,9 +624,14 @@ class TelegramInterface:
             caption = m.caption or ""
             await self._perceive_and_respond(m, file_url, caption)
         else:
-            # Non-image documents - could handle with file_handler later
-            # For now, let it fall through to _all_messages
-            pass
+            # Non-image documents - log and ignore for now
+            log_message(
+                m.chat.id, m.message_id, m.from_user.id,
+                getattr(m.from_user, "username", None),
+                f"<document: {m.document.file_name}>", "in"
+            )
+            # Explicitly return to prevent fall-through to _all_messages
+            return
 
     async def _voice_messages(self, m: types.Message):
         """Handle voice messages."""
@@ -697,7 +702,7 @@ class TelegramInterface:
         finally:
             tmp.close()
             try:
-                os.remove(tmp.name)
+                await asyncio.to_thread(os.remove, tmp.name)
             except OSError:
                 pass
 
