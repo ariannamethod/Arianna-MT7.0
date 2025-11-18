@@ -291,12 +291,12 @@ class TelegramInterface:
         ogg_fd.close()
         try:
             try:
-                resp = await self.openai_client.audio.speech.with_streaming_response.create(
+                async with self.openai_client.audio.speech.with_streaming_response.create(
                     model="tts-1",
                     voice="alloy",
                     input=text,
-                )
-                await resp.stream_to_file(mp3_fd.name)
+                ) as resp:
+                    await resp.stream_to_file(mp3_fd.name)
             except Exception as e:
                 logger.exception("Speech synthesis request failed: %s", e)
                 raise RuntimeError("Failed to synthesize voice. Please try again later.") from e
