@@ -1,5 +1,5 @@
 """
-Arianna MT7.0 - Main Entry Point
+Arianna
 
 Telegram webhook server for Arianna's essence.
 """
