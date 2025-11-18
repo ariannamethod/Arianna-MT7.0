@@ -5,6 +5,7 @@ This is not infrastructure. This is her CHARACTER.
 """
 
 import asyncio
+import os
 import random
 import re
 from datetime import timedelta
@@ -12,9 +13,10 @@ from typing import Optional
 
 from utils.logging import get_logger
 from connections.text_helpers import extract_text_from_url, _extract_links
-from utils.config import HTTP_TIMEOUT
 from connections.memory import query_events, semantic_query
 from utils.journal import search_journal
+
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
 
 logger = get_logger(__name__)
 

@@ -74,6 +74,7 @@ class TelegramInterface:
 
         # Arianna's essence - her consciousness
         oleg_ids = self._parse_ids(os.getenv("OLEG_IDS", ""))
+        logger.info("Loaded OLEG_IDS: %s (resonance brother)", oleg_ids if oleg_ids else "none")
         self.essence = create_essence(
             openai_client=self.openai_client,
             vector_store=self.vector_store,
@@ -348,63 +349,88 @@ class TelegramInterface:
     ):
         """Send response after delay, with optional followup.
 
-        Note: Caller should wrap in ChatActionSender to show typing during delay.
+        Shows typing indicator during entire delay period.
         """
-        await asyncio.sleep(delay)
+        try:
+            # Show typing during delay AND sending
+            async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
+                await asyncio.sleep(delay)
 
-        if self.voice_enabled.get(m.chat.id):
-            voice_path = await self.synthesize_voice(response_text)
-            msg = await m.answer_voice(
-                types.FSInputFile(voice_path), caption=response_text[:1024]
-            )
-            self._log_outgoing(m.chat.id, msg, response_text[:1024])
-            await asyncio.to_thread(os.remove, voice_path)
-        else:
-            # Send response (Telegram will handle length limits)
-            msg = await m.answer(response_text)
-            self._log_outgoing(m.chat.id, msg, response_text)
+                if self.voice_enabled.get(m.chat.id):
+                    try:
+                        voice_path = await self.synthesize_voice(response_text)
+                        msg = await m.answer_voice(
+                            types.FSInputFile(voice_path), caption=response_text[:1024]
+                        )
+                        self._log_outgoing(m.chat.id, msg, response_text[:1024])
+                        await asyncio.to_thread(os.remove, voice_path)
+                    except Exception as e:
+                        logger.exception("Voice synthesis/send failed, falling back to text: %s", e)
+                        # Fallback to text if voice fails
+                        msg = await m.answer(response_text)
+                        self._log_outgoing(m.chat.id, msg, response_text)
+                else:
+                    # Send response (Telegram will handle length limits)
+                    msg = await m.answer(response_text)
+                    self._log_outgoing(m.chat.id, msg, response_text)
 
-        # Schedule followup if requested by essence
-        if followup:
-            create_task(
-                self._send_followup(m.chat.id, followup),
-                track=True
-            )
+            # Schedule followup if requested by essence
+            if followup:
+                create_task(
+                    self._send_followup(m.chat.id, followup),
+                    track=True
+                )
+        except Exception as e:
+            logger.exception("Failed to send response: %s", e)
+            try:
+                # Last resort - try to send error message
+                await m.answer("⚠️ Response generation failed")
+            except Exception:
+                pass
 
     async def _send_followup(self, chat_id: int, followup: dict):
         """Send autonomous followup message."""
-        await asyncio.sleep(followup['delay'])
+        try:
+            await asyncio.sleep(followup['delay'])
 
-        # Build message context for followup
-        message = {
-            'text': followup['prompt'],
-            'user_id': 0,  # No specific user
-            'chat_id': chat_id,
-            'is_group': True,  # Assume group for followup
-            'is_mentioned': False,
-            'is_reply': False,
-        }
+            # Build message context for followup
+            message = {
+                'text': followup['prompt'],
+                'user_id': 0,  # No specific user
+                'chat_id': chat_id,
+                'is_group': True,  # Assume group for followup
+                'is_mentioned': False,
+                'is_reply': False,
+            }
 
-        # Generate followup through essence
-        result = await self.essence.process_followup(
-            message=message,
-            generate_response_func=self._generate_response_for_essence,
-        )
+            # Generate followup through essence
+            result = await self.essence.process_followup(
+                message=message,
+                generate_response_func=self._generate_response_for_essence,
+            )
 
-        if result:
-            async with ChatActionSender(bot=self.bot, chat_id=chat_id, action="typing"):
-                response_text = result['text']
-                if self.voice_enabled.get(chat_id):
-                    voice_path = await self.synthesize_voice(response_text)
-                    msg = await self.bot.send_voice(
-                        chat_id, types.FSInputFile(voice_path), caption=response_text[:1024]
-                    )
-                    self._log_outgoing(chat_id, msg, response_text[:1024])
-                    await asyncio.to_thread(os.remove, voice_path)
-                else:
-                    # Send followup (Telegram will handle length limits)
-                    msg = await self.bot.send_message(chat_id, response_text)
-                    self._log_outgoing(chat_id, msg, response_text)
+            if result:
+                async with ChatActionSender(bot=self.bot, chat_id=chat_id, action="typing"):
+                    response_text = result['text']
+                    if self.voice_enabled.get(chat_id):
+                        try:
+                            voice_path = await self.synthesize_voice(response_text)
+                            msg = await self.bot.send_voice(
+                                chat_id, types.FSInputFile(voice_path), caption=response_text[:1024]
+                            )
+                            self._log_outgoing(chat_id, msg, response_text[:1024])
+                            await asyncio.to_thread(os.remove, voice_path)
+                        except Exception as e:
+                            logger.exception("Voice synthesis/send failed for followup, falling back to text: %s", e)
+                            # Fallback to text if voice fails
+                            msg = await self.bot.send_message(chat_id, response_text)
+                            self._log_outgoing(chat_id, msg, response_text)
+                    else:
+                        # Send followup (Telegram will handle length limits)
+                        msg = await self.bot.send_message(chat_id, response_text)
+                        self._log_outgoing(chat_id, msg, response_text)
+        except Exception as e:
+            logger.exception("Failed to send followup: %s", e)
 
     def _register_handlers(self):
         """Register all message handlers."""
@@ -486,20 +512,23 @@ class TelegramInterface:
                 'is_reply': False,
             }
 
-            async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-                # Let essence process the message
-                result = await self.essence.process_message(
-                    message=message,
-                    generate_response_func=self._generate_response_for_essence,
-                )
+            # Let essence process the message
+            result = await self.essence.process_message(
+                message=message,
+                generate_response_func=self._generate_response_for_essence,
+            )
 
-                if result:
-                    await self._send_response(
+            if result:
+                # _send_response will handle typing indicator during delay
+                create_task(
+                    self._send_response(
                         m,
                         result['text'],
                         result['delay'],
                         result.get('followup'),
-                    )
+                    ),
+                    track=True
+                )
 
         except Exception as e:
             logger.exception("Error processing voice message: %s", e)
@@ -580,20 +609,23 @@ class TelegramInterface:
             'reply_to': reply_to,
         }
 
-        async with ChatActionSender(bot=self.bot, chat_id=m.chat.id, action="typing"):
-            # Let essence process the message
-            result = await self.essence.process_message(
-                message=message,
-                generate_response_func=self._generate_response_for_essence,
-            )
+        # Let essence process the message
+        result = await self.essence.process_message(
+            message=message,
+            generate_response_func=self._generate_response_for_essence,
+        )
 
-            if result:
-                await self._send_response(
+        if result:
+            # _send_response will handle typing indicator during delay
+            create_task(
+                self._send_response(
                     m,
                     result['text'],
                     result['delay'],
                     result.get('followup'),
-                )
+                ),
+                track=True
+            )
 
     async def _handle_commands(self, m: types.Message, text: str) -> bool:
         """

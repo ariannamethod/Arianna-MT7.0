@@ -8,9 +8,10 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from connections.cache import async_ttl_cache
-from utils.config import HTTP_TIMEOUT, CACHE_TTL
 from utils.logging import get_logger
 
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
+CACHE_TTL = float(os.getenv("CACHE_TTL", "300"))
 ALLOWED_DOMAINS = {d for d in os.getenv("ALLOWED_DOMAINS", "").split(",") if d}
 ALLOWED_CONTENT_TYPES = {"text/html", "text/plain"}
 MAX_CONTENT_KB = int(os.getenv("MAX_CONTENT_KB", 100))
