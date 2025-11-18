@@ -16,7 +16,7 @@ import re
 import json
 import logging
 
-from .archive import safe_extract
+from utils.archive import safe_extract
 
 try:  # Optional dependency
     from bs4 import BeautifulSoup
@@ -30,15 +30,11 @@ try:
 except ImportError:
     CharGen = None
 
-# DeepSeek R1 for paraphrasing
+# Optional aiohttp for future extensions
 try:
     import aiohttp
-    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-    DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-    DEEPSEEK_MODEL = "deepseek-chat"
 except ImportError:
     aiohttp = None
-    DEEPSEEK_API_KEY = ""
 try:  # Optional dependency
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -365,56 +361,24 @@ def load_cache(path: str, max_age: float = 43200) -> Optional[Dict]:
             return {"ext": result[0], "hash": result[1], "tags": result[2], "relevance": result[3], "summary": result[4]}
         return None
 
-# Async paraphrase using DeepSeek R1
+# Simple async paraphrase without external API calls
 async def paraphrase(text: str, prefix: str = "Summarize this file: ") -> str:
-    """Generate summary using DeepSeek chat model with field-resonance style."""
-    temp = 0.7 + chaos_pulse.get() * 0.3
+    """Generate simple summary using local processing only."""
 
-    # Try DeepSeek R1 first
-    if DEEPSEEK_API_KEY and aiohttp:
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "model": DEEPSEEK_MODEL,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "Summarize files with field-resonance language. Be concise, vivid, alive. Use words like: field, resonance, pattern, node, mutation, echo."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"{prefix}{text[:300]}"
-                        }
-                    ],
-                    "temperature": temp,
-                    "max_tokens": 150
-                }
-                headers = {
-                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-                async with session.post(DEEPSEEK_API_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        paraphrased = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                        if paraphrased and len(paraphrased) >= 20:
-                            markov.update_chain(paraphrased)
-                            return paraphrased + random.choice([" ⚡ Thunder births!", " ⚡ Field vibrates!", " ⚡ Resonance unfolds!"])
-        except Exception as e:
-            log_event(f"DeepSeek paraphrase failed: {str(e)}", "error")
+    # Extract keywords for summary
+    words = re.findall(r'\w+', text[:300].lower())
+    keywords = [w for w in words if w in {"field", "resonance", "pattern", "node", "mutation", "echo", "data", "file", "text", "content", "extract"}]
 
-    # Fallback to CharGen if available
-    if cg:
-        try:
-            paraphrased = cg.generate(prefix=prefix + text[:200], n=400, temp=temp).strip()
-            if paraphrased and len(paraphrased) >= 50:
-                markov.update_chain(paraphrased)
-                return paraphrased + random.choice([" ⚡ Field pulse!", " ⚡ Recursion alive!", " ⚡ Pattern emerges!"])
-        except (RuntimeError, ValueError) as e:
-            log_event(f"CharGen paraphrase failed: {str(e)}", "error")
+    # Generate simple summary
+    if keywords:
+        key_str = ', '.join(keywords[:5])
+        summary = f"Field resonance: {key_str}"
+        markov.update_chain(text[:200])
+    else:
+        summary = f"Pattern: {len(text)} chars"
 
-    # Final fallback - return text with field-resonance suffix
-    return text[:200] + " ⚡ Field holds, silence resonates."
+    # Add resonance marker
+    return summary + random.choice([" ⚡", " ⚡ Thunder!", " ⚡ Field pulse!"])
 
 # FileHandler
 class FileHandler:
@@ -872,7 +836,7 @@ async def parse_and_store_file(
     handler: FileHandler | None = None,
     vector_store=None,
 ) -> str:
-    from utils.sqlite_vector_store import SQLiteVectorStore
+    from core.vector_store_sqlite import SQLiteVectorStore
     handler = handler or FileHandler()
 
     # Извлекаем содержимое файла без участия динамических весов
